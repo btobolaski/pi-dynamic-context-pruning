@@ -1,0 +1,11 @@
+
+[commands]
+lint = ["true"]
+test = ["bun", "run", "pruner.test.ts"]
+build = ["true"]
+format = ["true"]
+
+[[checks]]
+name = "tests"
+command = ["bun", "run", "pruner.test.ts"]
+

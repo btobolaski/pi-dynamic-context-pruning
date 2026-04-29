@@ -77,7 +77,7 @@ const DEFAULT_CONFIG: DcpConfig = {
 
 const DEFAULT_CONFIG_FILE_CONTENT = `{
   // Dynamic Context Pruning (DCP) configuration
-  // Full schema reference: https://github.com/your-org/pi-dynamic-context-pruning
+  // Full schema reference: https://github.com/complexthings/pi-dynamic-context-pruning
   //
   // "$schema": "...",
   //
@@ -113,16 +113,33 @@ const DEFAULT_CONFIG_FILE_CONTENT = `{
 // ---------------------------------------------------------------------------
 
 /**
+ * Deep-clone arrays and plain objects.
+ */
+function cloneValue<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneValue(item)) as T
+  }
+  if (value !== null && typeof value === "object") {
+    const result: Record<string, unknown> = {}
+    for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+      result[key] = cloneValue(nestedValue)
+    }
+    return result as T
+  }
+  return value
+}
+
+/**
  * Recursively merge `override` into `base`. Arrays are union-merged (deduped).
  * Returns a new object; does not mutate inputs.
  */
 function deepMerge<T>(base: T, override: Partial<T>): T {
-  if (override === null || override === undefined) return base
+  if (override === null || override === undefined) return cloneValue(base)
   if (typeof base !== "object" || typeof override !== "object") {
-    return override as T
+    return cloneValue(override as T)
   }
 
-  const result: Record<string, unknown> = { ...(base as Record<string, unknown>) }
+  const result: Record<string, unknown> = cloneValue(base as Record<string, unknown>)
 
   for (const key of Object.keys(override as Record<string, unknown>)) {
     const baseVal = (base as Record<string, unknown>)[key]
@@ -167,7 +184,7 @@ function readJsoncFile(filePath: string): Record<string, unknown> {
   const errors: unknown[] = []
   const parsed = parseJsonc(raw, errors)
   if (errors.length > 0) {
-    // Non-fatal: return whatever was parsed (jsonc-parser is lenient)
+    return {}
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     return {}
@@ -176,7 +193,7 @@ function readJsoncFile(filePath: string): Record<string, unknown> {
 }
 
 /**
- * Ensure the global config file exists, creating it with defaults if missing.
+ * Ensure the global config file exists, creating it with a commented default template if missing.
  */
 function ensureGlobalConfig(filePath: string): void {
   const dir = path.dirname(filePath)
@@ -188,6 +205,14 @@ function ensureGlobalConfig(filePath: string): void {
   } catch {
     // Best-effort; do not crash if we cannot write
   }
+}
+
+/**
+ * Resolve the home directory for config loading.
+ * Prefer HOME when present so tests and sandboxed launches can override it.
+ */
+function getHomeDir(): string {
+  return process.env["HOME"] || os.homedir()
 }
 
 /**
@@ -215,23 +240,20 @@ function findProjectConfig(startDir: string): string | null {
 /**
  * Load the DCP configuration by merging (in order):
  *  1. Built-in defaults
- *  2. ~/.config/pi/dcp.jsonc  (global; auto-created if missing)
+ *  2. ~/.pi/agent/dcp.jsonc  (global; auto-created with a commented default template if missing)
  *  3. $PI_CONFIG_DIR/dcp.jsonc  (if env var is set)
  *  4. <project>/.pi/dcp.jsonc  (walked up from projectDir)
  */
 export function loadConfig(projectDir: string): DcpConfig {
-  // Layer 1: defaults (deep clone so we never mutate the constant)
   let config: DcpConfig = deepMerge(DEFAULT_CONFIG, {})
 
-  // Layer 2: global config
-  const globalConfigPath = path.join(os.homedir(), ".config", "pi", "dcp.jsonc")
+  const globalConfigPath = path.join(getHomeDir(), ".pi", "agent", "dcp.jsonc")
   ensureGlobalConfig(globalConfigPath)
   const globalRaw = readJsoncFile(globalConfigPath)
   if (Object.keys(globalRaw).length > 0) {
     config = deepMerge(config, globalRaw as Partial<DcpConfig>)
   }
 
-  // Layer 3: $PI_CONFIG_DIR/dcp.jsonc
   const piConfigDir = process.env["PI_CONFIG_DIR"]
   if (piConfigDir) {
     const envConfigPath = path.join(piConfigDir, "dcp.jsonc")
@@ -241,7 +263,6 @@ export function loadConfig(projectDir: string): DcpConfig {
     }
   }
 
-  // Layer 4: project-local config (walk up from projectDir)
   const projectConfigPath = findProjectConfig(projectDir)
   if (projectConfigPath) {
     const projectRaw = readJsoncFile(projectConfigPath)

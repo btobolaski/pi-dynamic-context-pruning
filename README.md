@@ -34,14 +34,16 @@ pi -e https://github.com/complexthings/pi-dynamic-context-pruning
 
 ## Configuration
 
-DCP uses a layered configuration system (later layers override earlier ones):
+DCP uses a layered configuration system:
 
 1. Built-in defaults
-2. `~/.config/pi/dcp.jsonc` — global user config (auto-created with defaults on first run)
+2. `~/.pi/agent/dcp.jsonc` — global user config (auto-created with a commented default template on first run)
 3. `$PI_CONFIG_DIR/dcp.jsonc` — if the env var is set
 4. `<project>/.pi/dcp.jsonc` — project-local overrides (walk up from cwd)
 
-### Example: `~/.config/pi/dcp.jsonc`
+Later layers override earlier scalar/object values. Array values are union-merged and deduplicated across layers.
+
+### Example: `~/.pi/agent/dcp.jsonc`
 
 ```jsonc
 {

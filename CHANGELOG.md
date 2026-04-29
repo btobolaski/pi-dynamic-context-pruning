@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Global config path moved** — DCP now loads its global user config from `~/.pi/agent/dcp.jsonc` instead of `~/.config/pi/dcp.jsonc`. Existing global configs should be moved to the new path.
+
 ### Added
 
 - **Minimum compress-range enforcement** (`compress.minRangeMessages`) — when set above `0`, the `compress` tool rejects any range whose visible span is smaller than the configured minimum consecutive conversation items. The default remains `0`, which keeps the feature disabled unless explicitly configured.

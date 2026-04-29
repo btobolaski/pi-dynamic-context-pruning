@@ -949,19 +949,23 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 15 — CONFIG LOADING DEFAULTS AND OVERRIDES
+// Test 15 — CONFIG LOADING DEFAULTS AND LAYER PRECEDENCE
 // ---------------------------------------------------------------------------
 {
-  console.log("TEST 15: loadConfig keeps minRangeMessages disabled by default and applies project overrides");
+  console.log("TEST 15: loadConfig auto-creates ~/.pi/agent/dcp.jsonc and honors layer precedence");
 
   const previousHome = process.env["HOME"];
   const previousPiConfigDir = process.env["PI_CONFIG_DIR"];
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dcp-config-test-"));
   const homeDir = path.join(tempRoot, "home");
+  const envDir = path.join(tempRoot, "env");
   const projectDir = path.join(tempRoot, "project");
+  const nestedProjectDir = path.join(projectDir, "src", "nested");
+  const globalConfigPath = path.join(homeDir, ".pi", "agent", "dcp.jsonc");
 
   fs.mkdirSync(homeDir, { recursive: true });
-  fs.mkdirSync(projectDir, { recursive: true });
+  fs.mkdirSync(envDir, { recursive: true });
+  fs.mkdirSync(nestedProjectDir, { recursive: true });
 
   try {
     process.env["HOME"] = homeDir;
@@ -973,26 +977,72 @@ function findOrphanedToolUse(result: any[]): string | null {
       0,
       "FAIL — minRangeMessages should default to 0",
     );
+    assert.ok(
+      fs.existsSync(globalConfigPath),
+      "FAIL — global config should be auto-created at ~/.pi/agent/dcp.jsonc",
+    );
 
-    fs.mkdirSync(path.join(projectDir, ".pi"), { recursive: true });
     fs.writeFileSync(
-      path.join(projectDir, ".pi", "dcp.jsonc"),
+      globalConfigPath,
       `{
   "compress": {
-    "minRangeMessages": 4
+    "minRangeMessages": 1
   }
 }
 `,
       "utf8",
     );
 
-    const projectConfig = loadConfig(projectDir);
+    const globalConfig = loadConfig(projectDir);
+    assert.strictEqual(
+      globalConfig.compress.minRangeMessages,
+      1,
+      "FAIL — global config should override the default value",
+    );
+
+    process.env["PI_CONFIG_DIR"] = envDir;
+    fs.writeFileSync(
+      path.join(envDir, "dcp.jsonc"),
+      `{
+  "compress": {
+    "minRangeMessages": 2
+  }
+}
+`,
+      "utf8",
+    );
+
+    const envConfig = loadConfig(projectDir);
+    assert.strictEqual(
+      envConfig.compress.minRangeMessages,
+      2,
+      "FAIL — PI_CONFIG_DIR config should override the global config",
+    );
+
+    fs.mkdirSync(path.join(projectDir, ".pi"), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, ".pi", "dcp.jsonc"),
+      `{
+  "compress": {
+    "minRangeMessages": 3
+  }
+}
+`,
+      "utf8",
+    );
+
+    const projectConfig = loadConfig(nestedProjectDir);
     assert.strictEqual(
       projectConfig.compress.minRangeMessages,
-      4,
-      "FAIL — project config should override minRangeMessages",
+      3,
+      "FAIL — project config should override env/global config when discovered from nested directories",
     );
-    console.log("  PASS: config loading preserves the disabled default and respects overrides");
+    assert.strictEqual(
+      projectConfig.strategies.purgeErrors.turns,
+      4,
+      "FAIL — unrelated default values should remain intact after layered merges",
+    );
+    console.log("  PASS: config loading preserves defaults, merges all layers, and walks up for project config");
   } finally {
     if (previousHome === undefined) delete process.env["HOME"];
     else process.env["HOME"] = previousHome;
@@ -1004,6 +1054,185 @@ function findOrphanedToolUse(result: any[]): string | null {
   }
 
   console.log("TEST 15 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 16 — CONFIG PARSE ERRORS, ARRAY MERGING, AND LEGACY PATH REGRESSION
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 16: loadConfig ignores malformed files, union-merges arrays, and ignores the legacy global path");
+
+  const previousHome = process.env["HOME"];
+  const previousPiConfigDir = process.env["PI_CONFIG_DIR"];
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dcp-config-regression-test-"));
+  const homeDir = path.join(tempRoot, "home");
+  const envDir = path.join(tempRoot, "env");
+  const projectDir = path.join(tempRoot, "project");
+  const newGlobalConfigPath = path.join(homeDir, ".pi", "agent", "dcp.jsonc");
+  const legacyGlobalConfigPath = path.join(homeDir, ".config", "pi", "dcp.jsonc");
+
+  fs.mkdirSync(homeDir, { recursive: true });
+  fs.mkdirSync(envDir, { recursive: true });
+  fs.mkdirSync(path.join(projectDir, ".pi"), { recursive: true });
+  fs.mkdirSync(path.dirname(newGlobalConfigPath), { recursive: true });
+  fs.mkdirSync(path.dirname(legacyGlobalConfigPath), { recursive: true });
+
+  try {
+    process.env["HOME"] = homeDir;
+    process.env["PI_CONFIG_DIR"] = envDir;
+
+    fs.writeFileSync(
+      legacyGlobalConfigPath,
+      `{
+  "compress": {
+    "minRangeMessages": 99
+  }
+}
+`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      newGlobalConfigPath,
+      `{
+  "compress": {
+    "minRangeMessages": 1,
+    "protectedTools": ["write"]
+  }
+}
+`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(envDir, "dcp.jsonc"),
+      `{
+  "compress": {
+    "protectedTools": ["read"]
+  }
+}
+`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(projectDir, ".pi", "dcp.jsonc"),
+      `{
+  "compress": {
+    "protectedTools": ["write", "edit"]
+  }
+}
+`,
+      "utf8",
+    );
+
+    const mergedConfig = loadConfig(projectDir);
+    assert.strictEqual(
+      mergedConfig.compress.minRangeMessages,
+      1,
+      "FAIL — legacy ~/.config/pi/dcp.jsonc should be ignored in favor of ~/.pi/agent/dcp.jsonc",
+    );
+    assert.deepStrictEqual(
+      mergedConfig.compress.protectedTools,
+      ["compress", "write", "edit", "read"],
+      "FAIL — protectedTools should be union-merged and deduplicated across config layers",
+    );
+
+    fs.writeFileSync(
+      path.join(envDir, "dcp.jsonc"),
+      `{
+  "compress": {
+    "protectedTools": ["read"]
+`,
+      "utf8",
+    );
+
+    const malformedEnvConfig = loadConfig(projectDir);
+    assert.deepStrictEqual(
+      malformedEnvConfig.compress.protectedTools,
+      ["compress", "write", "edit"],
+      "FAIL — malformed env config should be ignored instead of partially applied",
+    );
+    console.log("  PASS: malformed configs are ignored, arrays union-merge, and the legacy path is unused");
+  } finally {
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+
+    if (previousPiConfigDir === undefined) delete process.env["PI_CONFIG_DIR"];
+    else process.env["PI_CONFIG_DIR"] = previousPiConfigDir;
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+
+  console.log("TEST 16 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 17 — LEGACY-ONLY PATH IS IGNORED AND DEFAULTS ARE ISOLATED
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 17: loadConfig ignores the legacy-only path and returns isolated default objects");
+
+  const previousHome = process.env["HOME"];
+  const previousPiConfigDir = process.env["PI_CONFIG_DIR"];
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dcp-config-isolation-test-"));
+  const homeDir = path.join(tempRoot, "home");
+  const projectDir = path.join(tempRoot, "project");
+  const newGlobalConfigPath = path.join(homeDir, ".pi", "agent", "dcp.jsonc");
+  const legacyGlobalConfigPath = path.join(homeDir, ".config", "pi", "dcp.jsonc");
+
+  fs.mkdirSync(homeDir, { recursive: true });
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.mkdirSync(path.dirname(legacyGlobalConfigPath), { recursive: true });
+
+  try {
+    process.env["HOME"] = homeDir;
+    delete process.env["PI_CONFIG_DIR"];
+
+    fs.writeFileSync(
+      legacyGlobalConfigPath,
+      `{
+  "compress": {
+    "minRangeMessages": 99
+  }
+}
+`,
+      "utf8",
+    );
+
+    const configA = loadConfig(projectDir);
+    const configB = loadConfig(projectDir);
+
+    assert.ok(
+      fs.existsSync(newGlobalConfigPath),
+      "FAIL — loading config should create the new ~/.pi/agent/dcp.jsonc template even when only the legacy path exists",
+    );
+    assert.strictEqual(
+      configA.compress.minRangeMessages,
+      0,
+      "FAIL — legacy-only ~/.config/pi/dcp.jsonc should be ignored",
+    );
+    assert.notStrictEqual(
+      configA.compress,
+      configB.compress,
+      "FAIL — separate loadConfig calls should not share nested config objects",
+    );
+
+    configA.compress.protectedTools.push("grep");
+    assert.deepStrictEqual(
+      configB.compress.protectedTools,
+      ["compress", "write", "edit"],
+      "FAIL — mutating one loaded config should not affect another or DEFAULT_CONFIG",
+    );
+    console.log("  PASS: legacy-only path is ignored and returned configs do not share nested defaults");
+  } finally {
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+
+    if (previousPiConfigDir === undefined) delete process.env["PI_CONFIG_DIR"];
+    else process.env["PI_CONFIG_DIR"] = previousPiConfigDir;
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+
+  console.log("TEST 17 PASSED\n");
 }
 
 console.log("All tests passed.");

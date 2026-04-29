@@ -17,6 +17,7 @@ export interface DcpConfig {
   compress: {
     maxContextPercent: number // 0-1, e.g. 0.8 — above this, aggressive nudges
     minContextPercent: number // 0-1, e.g. 0.4 — below this, no nudges
+    minRangeMessages: number // minimum visible items per compress range; 0 disables validation
     nudgeFrequency: number // inject nudge every N context events (default: 5)
     iterationNudgeThreshold: number // nudge after N tool calls since last user msg (default: 15)
     nudgeForce: "strong" | "soft"
@@ -52,6 +53,7 @@ const DEFAULT_CONFIG: DcpConfig = {
   compress: {
     maxContextPercent: 0.8,
     minContextPercent: 0.4,
+    minRangeMessages: 0,
     nudgeFrequency: 5,
     iterationNudgeThreshold: 15,
     nudgeForce: "soft",
@@ -90,6 +92,7 @@ const DEFAULT_CONFIG_FILE_CONTENT = `{
   // "compress": {
   //   "maxContextPercent": 0.8,
   //   "minContextPercent": 0.4,
+  //   "minRangeMessages": 0,
   //   "nudgeFrequency": 5,
   //   "iterationNudgeThreshold": 15,
   //   "nudgeForce": "soft",

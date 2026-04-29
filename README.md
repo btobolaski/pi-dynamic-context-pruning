@@ -56,6 +56,8 @@ DCP uses a layered configuration system (later layers override earlier ones):
     "maxContextPercent": 0.8,
     // Below 40 % context: no nudges
     "minContextPercent": 0.4,
+    // Minimum visible conversation items per compress range (0 disables)
+    "minRangeMessages": 0,
     // How many context events between nudges
     "nudgeFrequency": 5,
     // Nudge after this many tool calls since the last user message
@@ -63,7 +65,9 @@ DCP uses a layered configuration system (later layers override earlier ones):
     // "strong" = emergency tone, "soft" = housekeeping tone
     "nudgeForce": "soft",
     // These tool outputs are never auto-pruned
-    "protectedTools": ["compress", "write", "edit"]
+    "protectedTools": ["compress", "write", "edit"],
+    // Reserved for future behavior; currently not enforced at runtime
+    "protectUserMessages": false
   },
   "strategies": {
     "deduplication": {
@@ -106,14 +110,14 @@ All commands are available in the pi TUI via `/dcp <subcommand>`:
 
 ### Compression blocks
 
-When the LLM calls the `compress` tool it provides one or more `{startId, endId, summary}` ranges. DCP:
+When the LLM calls the `compress` tool it provides a `topic` string and one or more `{startId, endId, summary}` ranges. DCP:
 
 1. Records the range as a `CompressionBlock` with start/end timestamps
 2. On every `context` event, splices out the raw messages in that range
 3. Injects a synthetic `[Compressed section: …]` user message containing the summary
 4. Keeps the block state in the session so it survives restarts
 
-Message IDs (`m001`, `m042`, etc.) and block IDs (`b1`, `b3`) are injected into every message in the context so the LLM can reference exact boundaries.
+Message IDs (`m001`, `m042`, etc.) and block IDs (`b1`, `b3`) are injected into every message in the context so the LLM can reference exact boundaries. If `compress.minRangeMessages` is set above `0`, each requested range must cover at least that many consecutive visible conversation items or the tool rejects the call and asks for a larger range. Active compression blocks cannot be recompressed as part of a new overlapping range unless they are decompressed first. The `compress.protectUserMessages` setting is currently reserved for future behavior and is not enforced yet.
 
 ### Atomic tool pair removal
 

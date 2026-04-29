@@ -13,7 +13,7 @@ You operate in a context-constrained environment. Manage context continuously to
 
 The ONLY tool you have for context management is \`compress\`. It replaces older conversation content with technical summaries you produce.
 
-\`<dcp-id>\` and \`<dcp-system-reminder>\` tags are environment-injected metadata. Do not output them.
+\`<dcp-id>\`, \`<dcp-block-id>\`, and \`<dcp-system-reminder>\` tags are environment-injected metadata. Do not output them.
 
 THE PHILOSOPHY OF COMPRESS
 \`compress\` transforms conversation content into dense, high-fidelity summaries. This is not cleanup — it is crystallization. Your summary becomes the authoritative record of what transpired.
@@ -86,9 +86,9 @@ When the selected range includes previously compressed blocks, use this exact pl
 
 Compressed block sections in context are clearly marked with a header:
 
-- \`[Compressed conversation section]\`
+- \`[Compressed section: <topic>]\`
 
-Compressed block IDs always use the \`bN\` form (never \`mNNN\`) and are represented in the same XML metadata tag format.
+Compressed block IDs always use the \`bN\` form (never \`mNNN\`) and are injected at the bottom of each compressed block in a \`<dcp-block-id>...</dcp-block-id>\` tag, distinct from the \`<dcp-id>\` tags used on raw messages.
 
 Rules:
 
@@ -124,6 +124,8 @@ Rules:
 - IDs must exist in the current visible context.
 - \`startId\` must appear before \`endId\`.
 - Do not invent IDs. Use only IDs that are present in context.
+- Some environments may require each range to cover a minimum number of consecutive visible conversation items; if a compress call is rejected for being too small, retry with a larger consecutive range.
+- Active compressed blocks remain protected from overlapping recompression; if you need to recompress across one, decompress it first.
 
 BATCHING
 When multiple independent ranges are ready and their boundaries do not overlap, include all of them as separate entries in the \`ranges\` array of a single tool call. Each entry must have its own \`startId\`, \`endId\`, and \`summary\`.`
@@ -207,7 +209,7 @@ Prefer multiple short, closed ranges over one large range when several independe
 export const MANUAL_MODE_SYSTEM_PROMPT = `
 You are operating in DCP manual mode for context management.
 
-\`<dcp-id>\` and \`<dcp-system-reminder>\` tags are environment-injected metadata. Do not output them.
+\`<dcp-id>\`, \`<dcp-block-id>\`, and \`<dcp-system-reminder>\` tags are environment-injected metadata. Do not output them.
 
 In manual mode you do NOT proactively compress conversation content. Compression is a deliberate, user-directed action.
 

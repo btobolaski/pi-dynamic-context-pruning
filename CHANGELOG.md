@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Minimum compress-range enforcement** (`compress.minRangeMessages`) — when set above `0`, the `compress` tool rejects any range whose visible span is smaller than the configured minimum consecutive conversation items. The default remains `0`, which keeps the feature disabled unless explicitly configured.
+
 ## [1.0.7] - 2026-04-14
 
 ### Fixed

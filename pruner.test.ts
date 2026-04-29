@@ -5,7 +5,12 @@
  * Run with:  bun run pruner.test.ts
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import assert from "assert";
+import { registerCompressTool } from "./compress-tool.js";
+import { loadConfig } from "./config.js";
 import { applyPruning } from "./pruner.js";
 import type { DcpState } from "./state.js";
 import type { DcpConfig } from "./config.js";
@@ -22,6 +27,7 @@ function makeConfig(): DcpConfig {
     compress: {
       maxContextPercent: 0.8,
       minContextPercent: 0.4,
+      minRangeMessages: 0,
       nudgeFrequency: 5,
       iterationNudgeThreshold: 15,
       nudgeForce: "soft",
@@ -51,6 +57,38 @@ function makeState(compressionBlocks: DcpState["compressionBlocks"] = []): DcpSt
     nudgeCounter: 0,
     lastNudgeTurn: -1,
   };
+}
+
+async function executeCompressTool(
+  state: DcpState,
+  config: DcpConfig,
+  params: { topic: string; ranges: Array<{ startId: string; endId: string; summary: string }> },
+): Promise<any> {
+  let tool: any = null;
+
+  registerCompressTool(
+    {
+      registerTool(definition: any) {
+        tool = definition;
+      },
+    } as any,
+    state,
+    config,
+  );
+
+  assert.ok(tool, "FAIL — compress tool was not registered");
+
+  return await tool.execute(
+    "toolu_test",
+    params,
+    new AbortController().signal,
+    () => {},
+    {
+      ui: {
+        notify() {},
+      },
+    },
+  );
 }
 
 // Four-message sequence that exercises the bug:
@@ -754,6 +792,218 @@ function findOrphanedToolUse(result: any[]): string | null {
   console.log("  PASS: corrupted block skipped, all original messages preserved");
 
   console.log("TEST 10 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 11 — MIN RANGE DISABLED BY DEFAULT
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 11: minRangeMessages=0 leaves small ranges allowed");
+
+  const state = makeState();
+  state.messageIdSnapshot.set("m001", 1000);
+  state.messageIdSnapshot.set("m002", 2000);
+
+  const result = await executeCompressTool(state, makeConfig(), {
+    topic: "tiny range",
+    ranges: [
+      {
+        startId: "m001",
+        endId: "m001",
+        summary: "Single-message compression remains allowed when disabled.",
+      },
+    ],
+  });
+
+  assert.deepStrictEqual(result.details.blockIds, [1], "FAIL — expected block id b1");
+  assert.strictEqual(state.compressionBlocks.length, 1, "FAIL — expected one compression block");
+  console.log("  PASS: single-message range accepted when validation is disabled");
+
+  console.log("TEST 11 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 12 — MIN RANGE REJECTION
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 12: compress rejects ranges smaller than minRangeMessages");
+
+  const state = makeState();
+  state.messageIdSnapshot.set("m001", 1000);
+  state.messageIdSnapshot.set("m002", 2000);
+  state.messageIdSnapshot.set("m003", 3000);
+  state.messageIdSnapshot.set("m004", 4000);
+
+  const config = makeConfig();
+  config.compress.minRangeMessages = 3;
+
+  await assert.rejects(
+    () =>
+      executeCompressTool(state, config, {
+        topic: "too small",
+        ranges: [
+          {
+            startId: "m002",
+            endId: "m003",
+            summary: "This range is only two visible items long.",
+          },
+        ],
+      }),
+    /covers only 2 visible conversation item\(s\).*requires at least 3 consecutive visible item\(s\).*Choose a larger consecutive range and try again\./s,
+    "FAIL — expected a minimum-range validation error",
+  );
+  assert.strictEqual(
+    state.compressionBlocks.length,
+    0,
+    "FAIL — rejected compression should not create a block",
+  );
+  console.log("  PASS: too-small range rejected with clear guidance");
+
+  console.log("TEST 12 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 13 — MIN RANGE ACCEPTANCE AT THRESHOLD
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 13: compress accepts ranges that meet minRangeMessages exactly");
+
+  const state = makeState();
+  state.messageIdSnapshot.set("m001", 1000);
+  state.messageIdSnapshot.set("m002", 2000);
+  state.messageIdSnapshot.set("m003", 3000);
+  state.messageIdSnapshot.set("m004", 4000);
+
+  const config = makeConfig();
+  config.compress.minRangeMessages = 3;
+
+  const result = await executeCompressTool(state, config, {
+    topic: "large enough",
+    ranges: [
+      {
+        startId: "m002",
+        endId: "m004",
+        summary: "This range covers three visible items and should succeed.",
+      },
+    ],
+  });
+
+  assert.deepStrictEqual(result.details.blockIds, [1], "FAIL — expected block id b1");
+  assert.strictEqual(state.compressionBlocks.length, 1, "FAIL — expected one compression block");
+  assert.strictEqual(
+    state.compressionBlocks[0]?.startTimestamp,
+    2000,
+    "FAIL — expected the block to start at m002",
+  );
+  assert.strictEqual(
+    state.compressionBlocks[0]?.endTimestamp,
+    4000,
+    "FAIL — expected the block to end at m004",
+  );
+  console.log("  PASS: threshold-sized range accepted");
+
+  console.log("TEST 13 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 14 — BATCHED VALIDATION IS ATOMIC
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 14: batched compress rejection does not partially create blocks");
+
+  const state = makeState();
+  state.messageIdSnapshot.set("m001", 1000);
+  state.messageIdSnapshot.set("m002", 2000);
+  state.messageIdSnapshot.set("m003", 3000);
+  state.messageIdSnapshot.set("m004", 4000);
+  state.messageIdSnapshot.set("m005", 5000);
+
+  const config = makeConfig();
+  config.compress.minRangeMessages = 3;
+
+  await assert.rejects(
+    () =>
+      executeCompressTool(state, config, {
+        topic: "mixed batch",
+        ranges: [
+          {
+            startId: "m001",
+            endId: "m003",
+            summary: "This range is valid.",
+          },
+          {
+            startId: "m004",
+            endId: "m005",
+            summary: "This range is too small.",
+          },
+        ],
+      }),
+    /requires at least 3 consecutive visible item\(s\)/,
+    "FAIL — expected the mixed batch to be rejected",
+  );
+  assert.strictEqual(state.compressionBlocks.length, 0, "FAIL — rejected batch should create no blocks");
+  assert.strictEqual(state.nextBlockId, 1, "FAIL — rejected batch should not advance nextBlockId");
+  console.log("  PASS: rejected batch leaves compression state unchanged");
+
+  console.log("TEST 14 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 15 — CONFIG LOADING DEFAULTS AND OVERRIDES
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 15: loadConfig keeps minRangeMessages disabled by default and applies project overrides");
+
+  const previousHome = process.env["HOME"];
+  const previousPiConfigDir = process.env["PI_CONFIG_DIR"];
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dcp-config-test-"));
+  const homeDir = path.join(tempRoot, "home");
+  const projectDir = path.join(tempRoot, "project");
+
+  fs.mkdirSync(homeDir, { recursive: true });
+  fs.mkdirSync(projectDir, { recursive: true });
+
+  try {
+    process.env["HOME"] = homeDir;
+    delete process.env["PI_CONFIG_DIR"];
+
+    const defaultConfig = loadConfig(projectDir);
+    assert.strictEqual(
+      defaultConfig.compress.minRangeMessages,
+      0,
+      "FAIL — minRangeMessages should default to 0",
+    );
+
+    fs.mkdirSync(path.join(projectDir, ".pi"), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, ".pi", "dcp.jsonc"),
+      `{
+  "compress": {
+    "minRangeMessages": 4
+  }
+}
+`,
+      "utf8",
+    );
+
+    const projectConfig = loadConfig(projectDir);
+    assert.strictEqual(
+      projectConfig.compress.minRangeMessages,
+      4,
+      "FAIL — project config should override minRangeMessages",
+    );
+    console.log("  PASS: config loading preserves the disabled default and respects overrides");
+  } finally {
+    if (previousHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = previousHome;
+
+    if (previousPiConfigDir === undefined) delete process.env["PI_CONFIG_DIR"];
+    else process.env["PI_CONFIG_DIR"] = previousPiConfigDir;
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+
+  console.log("TEST 15 PASSED\n");
 }
 
 console.log("All tests passed.");

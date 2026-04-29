@@ -48,8 +48,9 @@ export interface CompressionBlock {
   endTimestamp: number
   /**
    * Timestamp of the first message *after* the range — the summary is injected
-   * immediately before this message.  Set to `Infinity` when the range extends
-   * to the end of the conversation.
+   * immediately before this message. Set to `endTimestamp + 1` when the range
+   * extends to the end of the conversation to avoid JSON corruption from
+   * serializing `Infinity`.
    */
   anchorTimestamp: number
   /** Whether this block is still being applied (false = soft-deleted) */

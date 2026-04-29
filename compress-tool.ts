@@ -81,6 +81,52 @@ function resolveAnchorTimestamp(endTimestamp: number, state: DcpState): number {
   return anchor ?? endTimestamp + 1
 }
 
+function getVisibleBlockTimestamp(block: CompressionBlock): number {
+  return Number.isFinite(block.anchorTimestamp)
+    ? block.anchorTimestamp - 0.5
+    : block.endTimestamp + 0.5
+}
+
+function resolveIdToVisibleTimestamp(rawId: string, state: DcpState): number {
+  const id = rawId.trim()
+
+  const blockMatch = id.match(/^b(\d+)$/i)
+  if (blockMatch) {
+    const blockId = parseInt(blockMatch[1]!, 10)
+    const block = state.compressionBlocks.find((b) => b.id === blockId && b.active)
+    if (!block) throw new Error(`Unknown message ID: ${id}`)
+    return getVisibleBlockTimestamp(block)
+  }
+
+  const ts = state.messageIdSnapshot.get(id)
+  if (ts === undefined) throw new Error(`Unknown message ID: ${id}`)
+  return ts
+}
+
+function countVisibleItemsInRange(
+  startId: string,
+  endId: string,
+  state: DcpState,
+): number {
+  const visibleStartTimestamp = resolveIdToVisibleTimestamp(startId, state)
+  const visibleEndTimestamp = resolveIdToVisibleTimestamp(endId, state)
+
+  if (visibleStartTimestamp > visibleEndTimestamp) {
+    throw new Error(
+      `Range start "${startId}" must appear before end "${endId}" in the conversation`,
+    )
+  }
+
+  let visibleCount = 0
+  for (const timestamp of state.messageIdSnapshot.values()) {
+    if (timestamp >= visibleStartTimestamp && timestamp <= visibleEndTimestamp) {
+      visibleCount += 1
+    }
+  }
+
+  return visibleCount
+}
+
 // ---------------------------------------------------------------------------
 // Tool registration
 // ---------------------------------------------------------------------------
@@ -121,6 +167,17 @@ export function registerCompressTool(
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const newBlockIds: number[] = []
+      const minRangeMessages = Number.isFinite(config.compress.minRangeMessages)
+        ? Math.max(0, Math.ceil(config.compress.minRangeMessages))
+        : 0
+      const validatedRanges: Array<{
+        startId: string
+        endId: string
+        startTimestamp: number
+        endTimestamp: number
+        anchorTimestamp: number
+        expandedSummary: string
+      }> = []
 
       for (const range of params.ranges) {
         const { startId, endId, summary } = range
@@ -149,6 +206,17 @@ export function registerCompressTool(
           )
         }
 
+        if (minRangeMessages > 0) {
+          const visibleItemsInRange = countVisibleItemsInRange(startId, endId, state)
+          if (visibleItemsInRange < minRangeMessages) {
+            throw new Error(
+              `Compression range (${startId}..${endId}) covers only ${visibleItemsInRange} visible conversation item(s). ` +
+              `This environment requires at least ${minRangeMessages} consecutive visible item(s) per range. ` +
+              `Choose a larger consecutive range and try again.`,
+            )
+          }
+        }
+
         // ── Overlap check against existing active blocks ─────────────────
         for (const existing of state.compressionBlocks) {
           if (!existing.active) continue
@@ -170,22 +238,40 @@ export function registerCompressTool(
           }
         }
 
-        // ── Anchor: first raw message after the range ────────────────────
-        const anchorTimestamp = resolveAnchorTimestamp(endTimestamp, state)
+        for (const existing of validatedRanges) {
+          const overlaps =
+            startTimestamp <= existing.endTimestamp &&
+            existing.startTimestamp <= endTimestamp
+          if (overlaps) {
+            throw new Error(
+              `Overlapping compression ranges are not supported. ` +
+              `New range (${startId}..${endId}) overlaps another requested range ` +
+              `(${existing.startId}..${existing.endId}).`,
+            )
+          }
+        }
 
-        // ── Expand any (bN) placeholders in the summary ──────────────────
-        const expandedSummary = expandBlockPlaceholders(summary, state)
+        validatedRanges.push({
+          startId,
+          endId,
+          startTimestamp,
+          endTimestamp,
+          anchorTimestamp: resolveAnchorTimestamp(endTimestamp, state),
+          expandedSummary: expandBlockPlaceholders(summary, state),
+        })
+      }
 
+      for (const range of validatedRanges) {
         // ── Create and store the compression block ───────────────────────
         const block: CompressionBlock = {
           id: state.nextBlockId++,
           topic: params.topic,
-          summary: expandedSummary,
-          startTimestamp,
-          endTimestamp,
-          anchorTimestamp,
+          summary: range.expandedSummary,
+          startTimestamp: range.startTimestamp,
+          endTimestamp: range.endTimestamp,
+          anchorTimestamp: range.anchorTimestamp,
           active: true,
-          summaryTokenEstimate: estimateTokens(expandedSummary),
+          summaryTokenEstimate: estimateTokens(range.expandedSummary),
           createdAt: Date.now(),
         }
 

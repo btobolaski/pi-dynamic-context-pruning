@@ -450,7 +450,7 @@ export function applyPruning(
 }
 
 /**
- * Inject context limit nudge as a synthetic user message at the end of messages.
+ * Inject a compress nudge as a synthetic user message at the end of messages.
  * Mutates messages in place.
  */
 export function injectNudge(messages: any[], nudgeText: string): void {
@@ -462,7 +462,11 @@ export function injectNudge(messages: any[], nudgeText: string): void {
 }
 
 /**
- * Determine if a nudge should fire and return the nudge type, or null.
+ * Determine which compress nudge should fire, if any.
+ *
+ * Above `maxContextPercent`, context-limit nudges fire immediately. Between
+ * `minContextPercent` and `maxContextPercent`, turn/iteration nudges fire only
+ * once `nudgeCounter` reaches `nudgeFrequency`.
  */
 export function getNudgeType(
   contextPercent: number,
@@ -474,14 +478,13 @@ export function getNudgeType(
     config.compress;
 
   if (contextPercent > maxContextPercent) {
-    // Only fire if nudge counter has reached frequency threshold
-    if (state.nudgeCounter >= nudgeFrequency) {
-      return nudgeForce === "strong" ? "context-strong" : "context-soft";
-    }
-    // Still above max but haven't hit frequency yet — fall through to lower checks
+    return nudgeForce === "strong" ? "context-strong" : "context-soft";
   }
 
   if (contextPercent > minContextPercent && contextPercent <= maxContextPercent) {
+    if (state.nudgeCounter < nudgeFrequency) {
+      return null;
+    }
     if (toolCallsSinceLastUser >= iterationNudgeThreshold) {
       return "iteration";
     }

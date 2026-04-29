@@ -118,8 +118,8 @@ export interface DcpState {
   nudgeCounter: number
   /**
    * The value of `currentTurn` at the time the last nudge was emitted.
-   * Used to avoid nudging more than once per user turn when nudgeFrequency is
-   * satisfied within the same turn.
+   * Reserved for future per-turn nudge deduplication; currently not read by
+   * the nudge logic.
    */
   lastNudgeTurn: number
 }

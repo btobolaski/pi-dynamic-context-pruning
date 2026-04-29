@@ -1,7 +1,7 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
 import * as os from "node:os"
-import { parse as parseJsonc } from "jsonc-parser"
+import { parse as parseJsonc, type ParseError } from "jsonc-parser"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -18,7 +18,7 @@ export interface DcpConfig {
     maxContextPercent: number // 0-1, e.g. 0.8 — above this, aggressive nudges
     minContextPercent: number // 0-1, e.g. 0.4 — below this, no nudges
     minRangeMessages: number // minimum visible items per compress range; 0 disables validation
-    nudgeFrequency: number // inject nudge every N context events (default: 5)
+    nudgeFrequency: number // cadence for mid-band turn/iteration nudges (default: 5)
     iterationNudgeThreshold: number // nudge after N tool calls since last user msg (default: 15)
     nudgeForce: "strong" | "soft"
     protectedTools: string[] // these tool outputs always protected from pruning
@@ -93,7 +93,7 @@ const DEFAULT_CONFIG_FILE_CONTENT = `{
   //   "maxContextPercent": 0.8,
   //   "minContextPercent": 0.4,
   //   "minRangeMessages": 0,
-  //   "nudgeFrequency": 5,
+  //   "nudgeFrequency": 5, // cadence for mid-band turn/iteration nudges
   //   "iterationNudgeThreshold": 15,
   //   "nudgeForce": "soft",
   //   "protectedTools": ["compress", "write", "edit"],
@@ -181,7 +181,7 @@ function readJsoncFile(filePath: string): Record<string, unknown> {
     return {}
   }
 
-  const errors: unknown[] = []
+  const errors: ParseError[] = []
   const parsed = parseJsonc(raw, errors)
   if (errors.length > 0) {
     return {}

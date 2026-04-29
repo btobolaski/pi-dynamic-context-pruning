@@ -11,7 +11,7 @@ import * as path from "node:path";
 import assert from "assert";
 import { registerCompressTool } from "./compress-tool.js";
 import { loadConfig } from "./config.js";
-import { applyPruning } from "./pruner.js";
+import { applyPruning, getNudgeType } from "./pruner.js";
 import type { DcpState } from "./state.js";
 import type { DcpConfig } from "./config.js";
 
@@ -1233,6 +1233,172 @@ function findOrphanedToolUse(result: any[]): string | null {
   }
 
   console.log("TEST 17 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 18 — Mid-band nudges are cadence-gated
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 18: mid-band nudges wait for nudgeFrequency");
+
+  const config = makeConfig();
+  config.compress.minContextPercent = 0.5;
+  config.compress.maxContextPercent = 0.8;
+  config.compress.nudgeFrequency = 20;
+  config.compress.iterationNudgeThreshold = 40;
+
+  const beforeCadence = getNudgeType(0.6, { ...makeState(), nudgeCounter: 19 }, config, 0);
+  assert.strictEqual(
+    beforeCadence,
+    null,
+    "FAIL — mid-band nudges should not fire before nudgeFrequency is reached",
+  );
+
+  const atCadence = getNudgeType(0.6, { ...makeState(), nudgeCounter: 20 }, config, 0);
+  assert.strictEqual(
+    atCadence,
+    "turn",
+    "FAIL — mid-band nudges should fire once nudgeFrequency is reached",
+  );
+
+  const strongMidBand = getNudgeType(
+    0.6,
+    { ...makeState(), nudgeCounter: 20 },
+    { ...config, compress: { ...config.compress, nudgeForce: "strong" } },
+    0,
+  );
+  assert.strictEqual(
+    strongMidBand,
+    "turn",
+    "FAIL — nudgeForce=strong should not change mid-band turn nudges into context nudges",
+  );
+
+  const iterationBeforeCadence = getNudgeType(0.6, { ...makeState(), nudgeCounter: 19 }, config, 40);
+  assert.strictEqual(
+    iterationBeforeCadence,
+    null,
+    "FAIL — mid-band iteration nudges should not fire before nudgeFrequency is reached",
+  );
+
+  const iterationAtCadence = getNudgeType(0.6, { ...makeState(), nudgeCounter: 20 }, config, 40);
+  assert.strictEqual(
+    iterationAtCadence,
+    "iteration",
+    "FAIL — mid-band iteration nudges should fire once cadence and iteration thresholds are both reached",
+  );
+
+  const belowIterationThreshold = getNudgeType(0.6, { ...makeState(), nudgeCounter: 20 }, config, 39);
+  assert.strictEqual(
+    belowIterationThreshold,
+    "turn",
+    "FAIL — mid-band nudges should remain turn nudges until iteration threshold is reached",
+  );
+
+  console.log("  PASS: mid-band nudges are cadence-gated");
+  console.log("TEST 18 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 19 — Above-max nudges fire immediately
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 19: above-max context nudges fire immediately");
+
+  const softConfig = makeConfig();
+  softConfig.compress.maxContextPercent = 0.8;
+  softConfig.compress.nudgeFrequency = 20;
+  softConfig.compress.nudgeForce = "soft";
+
+  const softNudge = getNudgeType(0.81, { ...makeState(), nudgeCounter: 0 }, softConfig, 0);
+  assert.strictEqual(
+    softNudge,
+    "context-soft",
+    "FAIL — above-max context should trigger a soft nudge immediately regardless of cadence",
+  );
+
+  const strongConfig = makeConfig();
+  strongConfig.compress.maxContextPercent = 0.8;
+  strongConfig.compress.nudgeFrequency = 20;
+  strongConfig.compress.nudgeForce = "strong";
+
+  const strongNudge = getNudgeType(0.95, { ...makeState(), nudgeCounter: 0 }, strongConfig, 0);
+  assert.strictEqual(
+    strongNudge,
+    "context-strong",
+    "FAIL — above-max context should trigger a strong nudge immediately regardless of cadence",
+  );
+
+  const aboveMaxWithManyTools = getNudgeType(0.95, { ...makeState(), nudgeCounter: 0 }, softConfig, 40);
+  assert.strictEqual(
+    aboveMaxWithManyTools,
+    "context-soft",
+    "FAIL — above-max context nudges should take precedence over iteration nudges",
+  );
+
+  const state = makeState();
+  const firstAboveMax = getNudgeType(0.9, state, softConfig, 0);
+  assert.strictEqual(
+    firstAboveMax,
+    "context-soft",
+    "FAIL — above-max context should trigger on the first eligible context event",
+  );
+  state.nudgeCounter = 0;
+  const secondAboveMax = getNudgeType(0.9, state, softConfig, 0);
+  assert.strictEqual(
+    secondAboveMax,
+    "context-soft",
+    "FAIL — above-max context should trigger again immediately after the counter reset",
+  );
+
+  console.log("  PASS: above-max nudges ignore cadence and fire immediately");
+  console.log("TEST 19 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 20 — Threshold boundaries
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 20: nudge threshold boundaries");
+
+  const config = makeConfig();
+  config.compress.minContextPercent = 0.5;
+  config.compress.maxContextPercent = 0.8;
+  config.compress.nudgeFrequency = 20;
+  config.compress.nudgeForce = "soft";
+  config.compress.iterationNudgeThreshold = 40;
+
+  assert.strictEqual(
+    getNudgeType(0.5, { ...makeState(), nudgeCounter: 999 }, config, 999),
+    null,
+    "FAIL — exactly minContextPercent should not trigger a nudge",
+  );
+
+  assert.strictEqual(
+    getNudgeType(0.5001, { ...makeState(), nudgeCounter: 19 }, config, 999),
+    null,
+    "FAIL — just above minContextPercent should still respect cadence",
+  );
+
+  assert.strictEqual(
+    getNudgeType(0.8, { ...makeState(), nudgeCounter: 19 }, config, 0),
+    null,
+    "FAIL — exactly maxContextPercent should remain cadence-gated",
+  );
+
+  assert.strictEqual(
+    getNudgeType(0.8, { ...makeState(), nudgeCounter: 20 }, config, 0),
+    "turn",
+    "FAIL — exactly maxContextPercent should use mid-band turn behavior at cadence",
+  );
+
+  assert.strictEqual(
+    getNudgeType(0.8001, { ...makeState(), nudgeCounter: 0 }, config, 999),
+    "context-soft",
+    "FAIL — values above maxContextPercent should immediately trigger context nudges",
+  );
+
+  console.log("  PASS: threshold boundaries behave as expected");
+  console.log("TEST 20 PASSED\n");
 }
 
 console.log("All tests passed.");

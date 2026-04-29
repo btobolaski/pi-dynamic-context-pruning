@@ -191,7 +191,9 @@ Keep active context uncompressed.
 </dcp-system-reminder>`
 
 /**
- * Injected after iterationNudgeThreshold tool calls since the last user message.
+ * Injected between minContextPercent and maxContextPercent, once
+ * nudgeFrequency is reached, after iterationNudgeThreshold tool calls since
+ * the last user message.
  */
 export const ITERATION_NUDGE = `<dcp-system-reminder>
 You've been iterating for a while after the last user message.

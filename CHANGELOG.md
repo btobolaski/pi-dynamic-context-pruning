@@ -5,6 +5,7 @@
 ### Changed
 
 - **Global config path moved** — DCP now loads its global user config from `~/.pi/agent/dcp.jsonc` instead of `~/.config/pi/dcp.jsonc`. Existing global configs should be moved to the new path.
+- **Above-max nudges now fire immediately** — `context-soft` and `context-strong` nudges fire on every `context` event once usage exceeds `maxContextPercent`. `nudgeFrequency` now only gates the mid-band `turn`/`iteration` nudges between `minContextPercent` and `maxContextPercent`.
 
 ### Added
 

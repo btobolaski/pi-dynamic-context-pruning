@@ -54,14 +54,14 @@ Later layers override earlier scalar/object values. Array values are union-merge
   // "manualMode": { "enabled": true, "automaticStrategies": true },
 
   "compress": {
-    // Above 80 % context: fire a nudge (every nudgeFrequency context events)
+    // Above 80 % context: fire an emergency nudge on every context event
     "maxContextPercent": 0.8,
     // Below 40 % context: no nudges
     "minContextPercent": 0.4,
     // Minimum visible conversation items per compress range (0 disables)
     // Raw messages count individually; each active compressed block counts as 1
     "minRangeMessages": 0,
-    // How many context events between nudges
+    // How many context events between mid-band turn/iteration nudges
     "nudgeFrequency": 5,
     // Nudge after this many tool calls since the last user message
     "iterationNudgeThreshold": 15,
@@ -135,10 +135,10 @@ When a compression range touches any part of an assistant→toolResult group, DC
 
 | Nudge | Condition |
 |---|---|
-| **context-strong** | Above `maxContextPercent`, nudge counter ≥ `nudgeFrequency`, `nudgeForce = "strong"` |
-| **context-soft** | Same as above with `nudgeForce = "soft"` |
-| **iteration** | Between min/max percent AND ≥ `iterationNudgeThreshold` tool calls since last user message |
-| **turn** | Between min/max percent, standard cadence |
+| **context-strong** | Above `maxContextPercent`, `nudgeForce = "strong"` — fires on every context event |
+| **context-soft** | Above `maxContextPercent`, `nudgeForce = "soft"` — fires on every context event |
+| **iteration** | Between min/max percent, once `nudgeFrequency` is reached, and ≥ `iterationNudgeThreshold` tool calls since last user message |
+| **turn** | Between min/max percent, once `nudgeFrequency` is reached, when the iteration threshold is not met |
 
 ### Deduplication
 

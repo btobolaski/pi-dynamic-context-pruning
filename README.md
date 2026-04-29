@@ -59,6 +59,7 @@ Later layers override earlier scalar/object values. Array values are union-merge
     // Below 40 % context: no nudges
     "minContextPercent": 0.4,
     // Minimum visible conversation items per compress range (0 disables)
+    // Raw messages count individually; each active compressed block counts as 1
     "minRangeMessages": 0,
     // How many context events between nudges
     "nudgeFrequency": 5,
@@ -116,10 +117,15 @@ When the LLM calls the `compress` tool it provides a `topic` string and one or m
 
 1. Records the range as a `CompressionBlock` with start/end timestamps
 2. On every `context` event, splices out the raw messages in that range
-3. Injects a synthetic `[Compressed section: …]` user message containing the summary
-4. Keeps the block state in the session so it survives restarts
+3. Injects a synthetic `[Compressed section: <topic>]` user message containing the summary
+4. Appends a `<dcp-block-id>bN</dcp-block-id>` metadata tag to that synthetic message so later compressions can reference the block directly
+5. Keeps the block state in the session so it survives restarts
 
-Message IDs (`m001`, `m042`, etc.) and block IDs (`b1`, `b3`) are injected into every message in the context so the LLM can reference exact boundaries. If `compress.minRangeMessages` is set above `0`, each requested range must cover at least that many consecutive visible conversation items or the tool rejects the call and asks for a larger range. Active compression blocks cannot be recompressed as part of a new overlapping range unless they are decompressed first. The `compress.protectUserMessages` setting is currently reserved for future behavior and is not enforced yet.
+Message IDs (`m001`, `m042`, etc.) and block IDs (`b1`, `b3`) are injected into the visible conversation so the LLM can reference exact boundaries. Active compression blocks cannot be recompressed as part of a new overlapping range unless they are decompressed first. The `compress.protectUserMessages` setting is currently reserved for future behavior and is not enforced yet.
+
+If `compress.minRangeMessages` is set above `0`, each requested range must cover at least that many consecutive **visible** conversation items or the tool rejects the call and asks for a larger range. This count is based on what the model can currently see in context: raw messages count as one item each, and each active compressed block also counts as one visible item.
+
+When compressing a range that already includes compressed blocks, the summary should reference those blocks with `(bN)` placeholders. DCP expands each placeholder with the stored block summary before saving the new compressed section.
 
 ### Atomic tool pair removal
 

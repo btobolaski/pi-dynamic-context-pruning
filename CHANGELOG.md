@@ -8,7 +8,8 @@
 
 ### Added
 
-- **Minimum compress-range enforcement** (`compress.minRangeMessages`) — when set above `0`, the `compress` tool rejects any range whose visible span is smaller than the configured minimum consecutive conversation items. The default remains `0`, which keeps the feature disabled unless explicitly configured.
+- **Minimum compress-range enforcement** (`compress.minRangeMessages`) — when set above `0`, the `compress` tool rejects any range whose visible span is smaller than the configured minimum consecutive conversation items. The default remains `0`, which keeps the feature disabled unless explicitly configured. The span is measured from the currently visible conversation, so active compressed blocks count as a single visible item.
+- **Compressed-block boundary metadata** — synthetic compressed messages are surfaced as `[Compressed section: <topic>]` and include a `<dcp-block-id>bN</dcp-block-id>` tag so later `compress` calls can reference block boundaries and use `(bN)` placeholders safely.
 
 ## [1.0.7] - 2026-04-14
 

@@ -2,12 +2,28 @@
 // Dynamic Context Pruning (DCP) — compress tool registration
 // ---------------------------------------------------------------------------
 
-import { Type } from "@sinclair/typebox"
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent"
-import type { CompressionBlock, DcpState } from "./state.js"
+import { Type } from "@sinclair/typebox"
 import type { DcpConfig } from "./config.js"
 import { COMPRESS_RANGE_DESCRIPTION } from "./prompts.js"
-import { estimateTokens } from "./pruner.js"
+import { estimateTokens, expandCompressionRange } from "./pruner.js"
+import type { CompressionBlock, DcpState } from "./state.js"
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type ActiveBlockOverlap = "none" | "contained" | "partial"
+
+type ValidatedRange = {
+  startId: string
+  endId: string
+  startTimestamp: number
+  endTimestamp: number
+  anchorTimestamp: number
+  expandedSummary: string
+  containedBlockIds: number[]
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -15,7 +31,7 @@ import { estimateTokens } from "./pruner.js"
 
 /**
  * Replace `(bN)` placeholders in a summary with the stored content of the
- * referenced compression block.  Unrecognised placeholders are left as-is.
+ * referenced compression block. Unrecognised placeholders are left as-is.
  */
 function expandBlockPlaceholders(summary: string, state: DcpState): string {
   return summary.replace(/\(b(\d+)\)/g, (match, idStr) => {
@@ -31,11 +47,11 @@ function expandBlockPlaceholders(summary: string, state: DcpState): string {
  * Resolve a user-supplied ID string (e.g. "m001" or "b3") to an actual
  * message timestamp.
  *
- * - `mNNN` ids  → looked up directly in `state.messageIdSnapshot`
- * - `bN`   ids  → matched against `state.compressionBlocks` by integer id;
- *                 `field` selects whether we return the block's start or end
- *                 timestamp depending on whether the id is used as a range
- *                 start or end boundary.
+ * - `mNNN` ids → looked up directly in `state.messageIdSnapshot`
+ * - `bN` ids   → matched against `state.compressionBlocks` by integer id;
+ *                `field` selects whether we return the block's start or end
+ *                timestamp depending on whether the id is used as a range
+ *                start or end boundary.
  *
  * Throws `Error("Unknown message ID: <id>")` when the id cannot be resolved.
  */
@@ -46,7 +62,6 @@ function resolveIdToTimestamp(
 ): number {
   const id = rawId.trim()
 
-  // Block ID: b1, b2, b10, …
   const blockMatch = id.match(/^b(\d+)$/i)
   if (blockMatch) {
     const blockId = parseInt(blockMatch[1]!, 10)
@@ -55,30 +70,27 @@ function resolveIdToTimestamp(
     return block[field]
   }
 
-  // Message ID: m001, m042, …
   const ts = state.messageIdSnapshot.get(id)
   if (ts === undefined) throw new Error(`Unknown message ID: ${id}`)
   return ts
 }
 
 /**
- * Determine the anchor timestamp for a compression block — the timestamp of
- * the first raw message that appears strictly after `endTimestamp`.
+ * Determine the anchor timestamp for a compression block — the first visible
+ * item that appears strictly after the selected range.
  *
- * Returns `endTimestamp + 1` when the range extends to the very end of the
- * visible conversation (nothing comes after it). We never use Infinity because
- * it corrupts JSON serialization (becomes null) and breaks numeric comparisons.
+ * Returns `endVisibleTimestamp + 1` when the range extends to the end of the
+ * visible conversation. We never use Infinity because it corrupts JSON
+ * serialization (becomes null) and breaks numeric comparisons.
  */
-function resolveAnchorTimestamp(endTimestamp: number, state: DcpState): number {
+function resolveAnchorTimestamp(endVisibleTimestamp: number, state: DcpState): number {
   let anchor: number | null = null
   for (const ts of state.messageIdSnapshot.values()) {
-    if (ts > endTimestamp && (anchor === null || ts < anchor)) {
+    if (ts > endVisibleTimestamp && (anchor === null || ts < anchor)) {
       anchor = ts
     }
   }
-  // Fall back to endTimestamp + 1 instead of Infinity to avoid JSON
-  // serialization corruption (Infinity → null) and comparison breakage.
-  return anchor ?? endTimestamp + 1
+  return anchor ?? endVisibleTimestamp + 1
 }
 
 function getVisibleBlockTimestamp(block: CompressionBlock): number {
@@ -127,10 +139,170 @@ function countVisibleItemsInRange(
   return visibleCount
 }
 
+function extractVisibleBlockId(message: any): number | null {
+  const parts = Array.isArray(message?.content)
+    ? message.content
+        .map((part: any) => (typeof part?.text === "string" ? part.text : ""))
+        .join("\n")
+    : typeof message?.content === "string"
+      ? message.content
+      : ""
+
+  const match = parts.match(/<dcp-block-id>b(\d+)<\/dcp-block-id>/)
+  return match ? parseInt(match[1]!, 10) : null
+}
+
+function buildVisibleRangeMessages(state: DcpState): Array<{
+  role: string
+  timestamp: number
+  content?: unknown
+  toolCallId?: string
+  effectiveStartTimestamp: number
+  effectiveEndTimestamp: number
+}> {
+  if (state.visibleMessagesSnapshot.length > 0) {
+    return state.visibleMessagesSnapshot
+      .filter((message: any) => Number.isFinite(message?.timestamp))
+      .map((message: any) => {
+        const blockId = extractVisibleBlockId(message)
+        const block =
+          (blockId !== null
+            ? state.compressionBlocks.find(
+                (candidate) => candidate.active && candidate.id === blockId,
+              )
+            : undefined) ??
+          state.compressionBlocks.find(
+            (candidate) =>
+              candidate.active && getVisibleBlockTimestamp(candidate) === message.timestamp,
+          )
+
+        return {
+          role: message.role ?? "user",
+          timestamp: message.timestamp,
+          content: message.content,
+          toolCallId:
+            typeof message.toolCallId === "string" ? message.toolCallId : undefined,
+          effectiveStartTimestamp: block?.startTimestamp ?? message.timestamp,
+          effectiveEndTimestamp: block?.endTimestamp ?? message.timestamp,
+        }
+      })
+      .sort((a, b) => a.timestamp - b.timestamp)
+  }
+
+  return [...state.messageIdSnapshot.values()]
+    .sort((a, b) => a - b)
+    .map((timestamp) => ({
+      role: "user",
+      timestamp,
+      effectiveStartTimestamp: timestamp,
+      effectiveEndTimestamp: timestamp,
+    }))
+}
+
+function rangesOverlap(
+  aStart: number,
+  aEnd: number,
+  bStart: number,
+  bEnd: number,
+): boolean {
+  return aStart <= bEnd && bStart <= aEnd
+}
+
+function rangeContainsBlock(
+  startTimestamp: number,
+  endTimestamp: number,
+  block: CompressionBlock,
+): boolean {
+  return startTimestamp <= block.startTimestamp && block.endTimestamp <= endTimestamp
+}
+
+function classifyActiveBlockOverlap(
+  startTimestamp: number,
+  endTimestamp: number,
+  block: CompressionBlock,
+): ActiveBlockOverlap {
+  if (!rangesOverlap(startTimestamp, endTimestamp, block.startTimestamp, block.endTimestamp)) {
+    return "none"
+  }
+
+  if (rangeContainsBlock(startTimestamp, endTimestamp, block)) {
+    return "contained"
+  }
+
+  return "partial"
+}
+
+function extractBlockPlaceholderIds(summary: string): number[] {
+  const ids: number[] = []
+  summary.replace(/\(b(\d+)\)/g, (_match, idStr) => {
+    ids.push(parseInt(idStr, 10))
+    return _match
+  })
+  return ids
+}
+
+function formatBlockIds(blockIds: number[]): string {
+  return blockIds.map((id) => `b${id}`).join(", ")
+}
+
+function validateContainedBlockPlaceholders(
+  summary: string,
+  containedBlockIds: number[],
+  startId: string,
+  endId: string,
+): void {
+  const placeholderIds = extractBlockPlaceholderIds(summary)
+  const expectedIds = [...containedBlockIds].sort((a, b) => a - b)
+  const expectedIdSet = new Set(expectedIds)
+  const placeholderCounts = new Map<number, number>()
+
+  for (const id of placeholderIds) {
+    placeholderCounts.set(id, (placeholderCounts.get(id) ?? 0) + 1)
+  }
+
+  const unexpectedIds = [...new Set(placeholderIds)]
+    .filter((id) => !expectedIdSet.has(id))
+    .sort((a, b) => a - b)
+
+  if (expectedIds.length === 0) {
+    if (unexpectedIds.length > 0) {
+      throw new Error(
+        `Compression range (${startId}..${endId}) does not contain any active compression blocks, ` +
+        `so its summary must not include block placeholders. ` +
+        `Unexpected placeholder(s): ${formatBlockIds(unexpectedIds)}.`,
+      )
+    }
+    return
+  }
+
+  const missingIds = expectedIds.filter((id) => (placeholderCounts.get(id) ?? 0) === 0)
+  const duplicatedIds = expectedIds.filter((id) => (placeholderCounts.get(id) ?? 0) > 1)
+
+  if (missingIds.length > 0 || duplicatedIds.length > 0 || unexpectedIds.length > 0) {
+    const parts = [
+      `Roll-up compression range (${startId}..${endId}) fully contains active block(s) ${formatBlockIds(expectedIds)}.`,
+      `Its summary must reference each contained block exactly once using (bN) placeholders.`,
+    ]
+
+    if (missingIds.length > 0) {
+      parts.push(`Missing: ${formatBlockIds(missingIds)}.`)
+    }
+    if (duplicatedIds.length > 0) {
+      parts.push(`Duplicated: ${formatBlockIds(duplicatedIds)}.`)
+    }
+    if (unexpectedIds.length > 0) {
+      parts.push(`Unexpected: ${formatBlockIds(unexpectedIds)}.`)
+    }
+
+    throw new Error(parts.join(" "))
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tool registration
 // ---------------------------------------------------------------------------
 
+/** Register the DCP `compress` tool. */
 export function registerCompressTool(
   pi: ExtensionAPI,
   state: DcpState,
@@ -167,41 +339,36 @@ export function registerCompressTool(
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const newBlockIds: number[] = []
+      const supersededBlockIds = new Set<number>()
       const minRangeMessages = Number.isFinite(config.compress.minRangeMessages)
         ? Math.max(0, Math.ceil(config.compress.minRangeMessages))
         : 0
-      const validatedRanges: Array<{
-        startId: string
-        endId: string
-        startTimestamp: number
-        endTimestamp: number
-        anchorTimestamp: number
-        expandedSummary: string
-      }> = []
+      const validatedRanges: ValidatedRange[] = []
+      const visibleRangeMessages = buildVisibleRangeMessages(state)
 
       for (const range of params.ranges) {
         const { startId, endId, summary } = range
 
-        // ── Resolve boundary timestamps ──────────────────────────────────
-        const startTimestamp = resolveIdToTimestamp(startId, "startTimestamp", state)
-        const endTimestamp = resolveIdToTimestamp(endId, "endTimestamp", state)
+        const requestedStartTimestamp = resolveIdToTimestamp(startId, "startTimestamp", state)
+        const requestedEndTimestamp = resolveIdToTimestamp(endId, "endTimestamp", state)
+        const startVisibleTimestamp = resolveIdToVisibleTimestamp(startId, state)
+        const endVisibleTimestamp = resolveIdToVisibleTimestamp(endId, state)
 
-        if (startTimestamp > endTimestamp) {
+        if (startVisibleTimestamp > endVisibleTimestamp) {
           throw new Error(
             `Range start "${startId}" must appear before end "${endId}" in the conversation`,
           )
         }
 
-        // ── Validate timestamps are finite ──────────────────────────────
-        if (!Number.isFinite(startTimestamp)) {
+        if (!Number.isFinite(requestedStartTimestamp)) {
           throw new Error(
-            `Start ID "${startId}" resolved to a non-finite timestamp (${startTimestamp}). ` +
+            `Start ID "${startId}" resolved to a non-finite timestamp (${requestedStartTimestamp}). ` +
             `This usually means the referenced message has a corrupted timestamp.`,
           )
         }
-        if (!Number.isFinite(endTimestamp)) {
+        if (!Number.isFinite(requestedEndTimestamp)) {
           throw new Error(
-            `End ID "${endId}" resolved to a non-finite timestamp (${endTimestamp}). ` +
+            `End ID "${endId}" resolved to a non-finite timestamp (${requestedEndTimestamp}). ` +
             `This usually means the referenced message has a corrupted timestamp.`,
           )
         }
@@ -217,52 +384,78 @@ export function registerCompressTool(
           }
         }
 
-        // ── Overlap check against existing active blocks ─────────────────
-        for (const existing of state.compressionBlocks) {
-          if (!existing.active) continue
-          // Skip blocks with corrupted timestamps
-          if (!Number.isFinite(existing.startTimestamp) || !Number.isFinite(existing.endTimestamp)) {
-            continue
-          }
-          const overlaps =
-            startTimestamp <= existing.endTimestamp &&
-            existing.startTimestamp <= endTimestamp
-          if (overlaps) {
-            throw new Error(
-              `Overlapping compression ranges are not supported. ` +
-              `New range (${startId}..${endId}) overlaps existing block ` +
-              `b${existing.id} "${existing.topic}" ` +
-              `(b${existing.id} covers ${existing.startTimestamp}..${existing.endTimestamp}, ` +
-              `new range covers ${startTimestamp}..${endTimestamp})`,
-            )
-          }
+        const expandedRange = expandCompressionRange(
+          visibleRangeMessages,
+          startVisibleTimestamp,
+          endVisibleTimestamp,
+        )
+        if (!expandedRange) {
+          throw new Error(
+            `Compression range (${startId}..${endId}) could not be resolved against the current visible context. ` +
+            `Refresh the visible context and try again.`,
+          )
         }
 
+        const { startTimestamp, endTimestamp } = expandedRange
+
+        const containedBlocks = state.compressionBlocks
+          .filter((block) => block.active)
+          .filter(
+            (block) =>
+              Number.isFinite(block.startTimestamp) && Number.isFinite(block.endTimestamp),
+          )
+          .filter((block) => {
+            const overlapType = classifyActiveBlockOverlap(startTimestamp, endTimestamp, block)
+            if (overlapType === "partial") {
+              throw new Error(
+                `Overlapping compression ranges are not supported unless the new range fully contains the existing active block for a roll-up. ` +
+                `New range (${startId}..${endId}) partially overlaps existing block ` +
+                `b${block.id} "${block.topic}" ` +
+                `(b${block.id} covers ${block.startTimestamp}..${block.endTimestamp}, ` +
+                `new range effectively covers ${startTimestamp}..${endTimestamp}).`,
+              )
+            }
+            return overlapType === "contained"
+          })
+          .sort(
+            (a, b) =>
+              a.startTimestamp - b.startTimestamp ||
+              a.endTimestamp - b.endTimestamp ||
+              a.id - b.id,
+          )
+
         for (const existing of validatedRanges) {
-          const overlaps =
-            startTimestamp <= existing.endTimestamp &&
-            existing.startTimestamp <= endTimestamp
+          const overlaps = rangesOverlap(
+            startTimestamp,
+            endTimestamp,
+            existing.startTimestamp,
+            existing.endTimestamp,
+          )
           if (overlaps) {
             throw new Error(
               `Overlapping compression ranges are not supported. ` +
               `New range (${startId}..${endId}) overlaps another requested range ` +
-              `(${existing.startId}..${existing.endId}).`,
+              `(${existing.startId}..${existing.endId}) after assistant/tool-result atomic expansion.`,
             )
           }
         }
+
+        const containedBlockIds = containedBlocks.map((block) => block.id)
+        validateContainedBlockPlaceholders(summary, containedBlockIds, startId, endId)
 
         validatedRanges.push({
           startId,
           endId,
           startTimestamp,
           endTimestamp,
-          anchorTimestamp: resolveAnchorTimestamp(endTimestamp, state),
+          anchorTimestamp: resolveAnchorTimestamp(expandedRange.endVisibleTimestamp, state),
           expandedSummary: expandBlockPlaceholders(summary, state),
+          containedBlockIds,
         })
       }
 
       for (const range of validatedRanges) {
-        // ── Create and store the compression block ───────────────────────
+        const createdAt = Date.now()
         const block: CompressionBlock = {
           id: state.nextBlockId++,
           topic: params.topic,
@@ -271,18 +464,32 @@ export function registerCompressTool(
           endTimestamp: range.endTimestamp,
           anchorTimestamp: range.anchorTimestamp,
           active: true,
+          supersedesBlockIds:
+            range.containedBlockIds.length > 0 ? [...range.containedBlockIds] : undefined,
           summaryTokenEstimate: estimateTokens(range.expandedSummary),
-          createdAt: Date.now(),
+          createdAt,
         }
 
         state.compressionBlocks.push(block)
         newBlockIds.push(block.id)
+
+        for (const childId of range.containedBlockIds) {
+          const child = state.compressionBlocks.find((candidate) => candidate.id === childId)
+          if (!child) continue
+          child.active = false
+          child.supersededByBlockId = block.id
+          child.supersededAt = createdAt
+          supersededBlockIds.add(childId)
+        }
       }
 
-      // ── Notification ────────────────────────────────────────────────────
       if (config.pruneNotification !== "off") {
         const count = params.ranges.length
         const rangeWord = count === 1 ? "range" : "ranges"
+        const rollupSuffix =
+          supersededBlockIds.size > 0
+            ? `, rolled up ${formatBlockIds([...supersededBlockIds].sort((a, b) => a - b))}`
+            : ""
 
         if (config.pruneNotification === "detailed") {
           const totalTokens = newBlockIds.reduce((sum, id) => {
@@ -290,16 +497,14 @@ export function registerCompressTool(
             return sum + (b?.summaryTokenEstimate ?? 0)
           }, 0)
           ctx.ui.notify(
-            `Compressed: ${params.topic} (${count} ${rangeWord}, ~${totalTokens} tokens in summaries)`,
+            `Compressed: ${params.topic} (${count} ${rangeWord}${rollupSuffix}, ~${totalTokens} tokens in summaries)`,
             "info",
           )
         } else {
-          // "minimal"
           ctx.ui.notify(`Compressed: ${params.topic}`, "info")
         }
       }
 
-      // ── Return result ───────────────────────────────────────────────────
       return {
         content: [
           {
@@ -310,6 +515,7 @@ export function registerCompressTool(
         details: {
           blockIds: newBlockIds,
           topic: params.topic,
+          supersededBlockIds: [...supersededBlockIds].sort((a, b) => a - b),
         },
       }
     },

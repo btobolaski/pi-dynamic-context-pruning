@@ -47,18 +47,26 @@ export interface CompressionBlock {
   /** Timestamp of the last message in the compressed range */
   endTimestamp: number
   /**
-   * Timestamp of the first message *after* the range — the summary is injected
-   * immediately before this message. Set to `endTimestamp + 1` when the range
-   * extends to the end of the conversation to avoid JSON corruption from
-   * serializing `Infinity`.
+   * Timestamp-like insertion anchor immediately after the visible range — the
+   * summary is injected at `anchorTimestamp - 0.5`. Usually this matches the
+   * next visible message timestamp; when the range extends to the end of the
+   * conversation it falls back to a synthetic finite value instead of `Infinity`.
    */
   anchorTimestamp: number
-  /** Whether this block is still being applied (false = soft-deleted) */
+  /** Whether this block is still being applied (false = soft-deleted or superseded) */
   active: boolean
+  /** IDs of direct child blocks this block superseded during roll-up compression */
+  supersedesBlockIds?: number[]
+  /** Parent block ID that superseded this block, if any */
+  supersededByBlockId?: number
+  /** Wall-clock time this block was superseded, if any */
+  supersededAt?: number
   /** Token estimate for the summary text itself */
   summaryTokenEstimate: number
   /** Wall-clock time the block was created (Date.now()) */
   createdAt: number
+  /** Whether this block's token savings have already been counted */
+  savingsApplied?: boolean
 }
 
 /**
@@ -76,6 +84,8 @@ export interface DcpState {
   compressionBlocks: CompressionBlock[]
   /** Monotonically increasing counter used to assign CompressionBlock.id */
   nextBlockId: number
+  /** Latest visible context snapshot after pruning, excluding transient nudges */
+  visibleMessagesSnapshot: any[]
 
   // ── Message ID snapshot ────────────────────────────────────────────────────
   /**
@@ -97,7 +107,7 @@ export interface DcpState {
   currentTurn: number
 
   // ── Statistics ─────────────────────────────────────────────────────────────
-  /** Running total of tokens estimated to have been saved by pruning/compression */
+  /** Running total of tokens estimated to have been saved by compression blocks */
   tokensSaved: number
   /** Number of discrete pruning operations performed */
   totalPruneCount: number
@@ -125,6 +135,21 @@ export interface DcpState {
 }
 
 // ---------------------------------------------------------------------------
+// State helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Record a newly pruned tool output exactly once.
+ * Returns true when the toolCallId was added during this call.
+ */
+export function markToolPruned(state: DcpState, toolCallId: string): boolean {
+  if (state.prunedToolIds.has(toolCallId)) return false
+  state.prunedToolIds.add(toolCallId)
+  state.totalPruneCount++
+  return true
+}
+
+// ---------------------------------------------------------------------------
 // Factory functions
 // ---------------------------------------------------------------------------
 
@@ -135,6 +160,7 @@ export function createState(): DcpState {
     prunedToolIds: new Set(),
     compressionBlocks: [],
     nextBlockId: 1,
+    visibleMessagesSnapshot: [],
     messageIdSnapshot: new Map(),
     currentTurn: 0,
     tokensSaved: 0,
@@ -155,6 +181,7 @@ export function resetState(state: DcpState): void {
   state.prunedToolIds.clear()
   state.compressionBlocks = []
   state.nextBlockId = 1
+  state.visibleMessagesSnapshot = []
   state.messageIdSnapshot.clear()
   state.currentTurn = 0
   state.tokensSaved = 0

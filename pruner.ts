@@ -1,13 +1,11 @@
-import type { DcpState } from "./state.js";
 import type { DcpConfig } from "./config.js";
+import { getProtectedTools, resolveToolName } from "./protected-tools.js";
+import { markToolPruned } from "./state.js";
+import type { DcpState } from "./state.js";
 
-// Always-protected tool names for deduplication
-const ALWAYS_PROTECTED_DEDUP = new Set(["compress", "write", "edit"]);
-
-// Roles that get message IDs injected
 const ID_ELIGIBLE_ROLES = new Set(["user", "assistant", "toolResult", "bashExecution"]);
-
-// Roles that are PI-internal and should pass through unchanged
+// Pi-internal passthrough roles do not get IDs; range expansion may still
+// include them when needed to keep assistant/tool-result groups atomic.
 const PASSTHROUGH_ROLES = new Set(["compaction", "branch_summary", "custom_message"]);
 
 /**
@@ -39,6 +37,136 @@ function estimateMessageTokens(msg: any): number {
   return 0;
 }
 
+type ExpandableRangeMessage = {
+  role: string;
+  timestamp: number;
+  content?: any;
+  toolCallId?: string;
+  effectiveStartTimestamp?: number;
+  effectiveEndTimestamp?: number;
+}
+
+export interface ExpandedCompressionRange {
+  startIndex: number;
+  endIndex: number;
+  startVisibleTimestamp: number;
+  endVisibleTimestamp: number;
+  startTimestamp: number;
+  endTimestamp: number;
+}
+
+/**
+ * Expand a selected compression range so assistant/tool-result groups stay
+ * atomic, returning both the visible bounds and the effective raw bounds.
+ */
+export function expandCompressionRange(
+  messages: ExpandableRangeMessage[],
+  startVisibleTimestamp: number,
+  endVisibleTimestamp: number,
+): ExpandedCompressionRange | null {
+  const startIdx = messages.findIndex((m) => m.timestamp === startVisibleTimestamp);
+  const endIdx = messages.findIndex((m) => m.timestamp === endVisibleTimestamp);
+
+  if (startIdx === -1 || endIdx === -1) return null;
+  if (startIdx > endIdx) return null;
+
+  let lo = startIdx;
+  let hi = endIdx;
+
+  while (lo > 0) {
+    let scanIdx = lo - 1;
+    while (scanIdx >= 0) {
+      const role = messages[scanIdx]?.role ?? "";
+      if (role !== "toolResult" && role !== "bashExecution" && !PASSTHROUGH_ROLES.has(role)) break;
+      scanIdx--;
+    }
+    if (scanIdx < 0 || messages[scanIdx]?.role !== "assistant") break;
+
+    const toolCallIdsInRange = new Set<string>();
+    for (let i = lo; i <= hi; i++) {
+      const message = messages[i];
+      if (
+        (message?.role === "toolResult" || message?.role === "bashExecution") &&
+        typeof message.toolCallId === "string"
+      ) {
+        toolCallIdsInRange.add(message.toolCallId);
+      }
+    }
+
+    const assistantContent: any[] = Array.isArray(messages[scanIdx]?.content)
+      ? messages[scanIdx]!.content
+      : [];
+    const hasMatchingToolCalls = assistantContent.some(
+      (block: any) => block.type === "toolCall" && toolCallIdsInRange.has(block.id),
+    );
+    if (!hasMatchingToolCalls) break;
+
+    lo = scanIdx;
+  }
+
+  let prevHi: number;
+  do {
+    prevHi = hi;
+    const assistantToolCallIds = new Set<string>();
+
+    for (let i = lo; i <= hi; i++) {
+      const message = messages[i];
+      if (message?.role !== "assistant") continue;
+      const content: any[] = Array.isArray(message.content) ? message.content : [];
+      for (const block of content) {
+        if (block.type === "toolCall" && typeof block.id === "string") {
+          assistantToolCallIds.add(block.id);
+        }
+      }
+    }
+
+    while (hi + 1 < messages.length) {
+      const next = messages[hi + 1];
+      if (
+        (next?.role === "toolResult" || next?.role === "bashExecution") &&
+        assistantToolCallIds.has(next.toolCallId ?? "")
+      ) {
+        hi++;
+      } else if (next && PASSTHROUGH_ROLES.has(next.role)) {
+        let scanIdx = hi + 1;
+        while (scanIdx < messages.length && PASSTHROUGH_ROLES.has(messages[scanIdx]?.role ?? "")) {
+          scanIdx++;
+        }
+        const bridgedResult = messages[scanIdx];
+        if (
+          (bridgedResult?.role === "toolResult" || bridgedResult?.role === "bashExecution") &&
+          assistantToolCallIds.has(bridgedResult.toolCallId ?? "")
+        ) {
+          hi++;
+        } else {
+          break;
+        }
+      } else {
+        break;
+      }
+    }
+  } while (hi !== prevHi);
+
+  let startTimestamp = Infinity;
+  let endTimestamp = -Infinity;
+  for (let i = lo; i <= hi; i++) {
+    const message = messages[i]!;
+    const effectiveStart = message.effectiveStartTimestamp ?? message.timestamp;
+    const effectiveEnd = message.effectiveEndTimestamp ?? message.timestamp;
+    if (effectiveStart < startTimestamp) startTimestamp = effectiveStart;
+    if (effectiveEnd > endTimestamp) endTimestamp = effectiveEnd;
+  }
+
+  return {
+    startIndex: lo,
+    endIndex: hi,
+    startVisibleTimestamp: messages[lo]!.timestamp,
+    endVisibleTimestamp: messages[hi]!.timestamp,
+    startTimestamp,
+    endTimestamp,
+  };
+}
+
 /**
  * Apply active compression blocks to the message array.
  * Mutates messages in place (via splice/sort) and returns it.
@@ -48,99 +176,18 @@ function applyCompressionBlocks(messages: any[], state: DcpState): any[] {
   if (activeBlocks.length === 0) return messages;
 
   for (const block of activeBlocks) {
-    // Skip blocks with corrupted timestamps (from pre-fix sessions)
     if (!Number.isFinite(block.startTimestamp) || !Number.isFinite(block.endTimestamp)) continue;
 
-    // Find start and end indices by timestamp
-    const startIdx = messages.findIndex((m) => m.timestamp === block.startTimestamp);
-    const endIdx = messages.findIndex((m) => m.timestamp === block.endTimestamp);
+    const expandedRange = expandCompressionRange(messages, block.startTimestamp, block.endTimestamp);
+    if (!expandedRange) continue;
 
-    if (startIdx === -1 || endIdx === -1) continue;
-
-    let lo = Math.min(startIdx, endIdx);
-    let hi = Math.max(startIdx, endIdx);
-
-    // Expand lo backward: if there is an assistant before lo whose tool_use
-    // blocks have matching tool_results inside [lo..hi], pull the entire
-    // assistant + any intermediate result messages into the range so the
-    // group is always removed atomically.
-    //
-    // Critically we must skip backward past any toolResult / bashExecution
-    // messages before lo, because an assistant with multiple tool_calls emits
-    // N consecutive result messages — the assistant itself sits further back.
-    while (lo > 0) {
-      // Walk backward past tool-result messages to find the preceding assistant
-      let scanIdx = lo - 1;
-      while (scanIdx >= 0) {
-        const r = (messages[scanIdx] as any).role as string;
-        if (r !== "toolResult" && r !== "bashExecution" && !PASSTHROUGH_ROLES.has(r)) break;
-        scanIdx--;
-      }
-      if (scanIdx < 0 || (messages[scanIdx] as any).role !== "assistant") break;
-
-      const prev = messages[scanIdx] as any;
-      const toolCallIdsInRange = new Set<string>();
-      for (let i = lo; i <= hi; i++) {
-        const m = messages[i] as any;
-        if (
-          (m.role === "toolResult" || m.role === "bashExecution") &&
-          typeof m.toolCallId === "string"
-        ) {
-          toolCallIdsInRange.add(m.toolCallId);
-        }
-      }
-      const prevContent: any[] = Array.isArray(prev.content) ? prev.content : [];
-      const hasMatchingToolCalls = prevContent.some(
-        (block: any) => block.type === "toolCall" && toolCallIdsInRange.has(block.id)
-      );
-      if (!hasMatchingToolCalls) break;
-      // Pull assistant + all intermediate result messages into the range
-      lo = scanIdx;
-    }
-
-    // Expand hi forward: for every assistant message in [lo..hi] that has
-    // tool_use blocks, include any immediately-following tool_result messages
-    // that correspond to those blocks. Loop to fixed point because expanding
-    // hi could expose more assistants in theory.
-    let prevHi: number;
-    do {
-      prevHi = hi;
-      const assistantToolCallIds = new Set<string>();
-      for (let i = lo; i <= hi; i++) {
-        const m = messages[i] as any;
-        if (m.role !== "assistant") continue;
-        const content: any[] = Array.isArray(m.content) ? m.content : [];
-        for (const block of content) {
-          if (block.type === "toolCall" && typeof block.id === "string") {
-            assistantToolCallIds.add(block.id);
-          }
-        }
-      }
-      while (hi + 1 < messages.length) {
-        const next = messages[hi + 1] as any;
-        if (
-          (next.role === "toolResult" || next.role === "bashExecution") &&
-          assistantToolCallIds.has(next.toolCallId)
-        ) {
-          hi++;
-        } else if (PASSTHROUGH_ROLES.has(next.role)) {
-          hi++;
-        } else {
-          break;
-        }
-      }
-    } while (hi !== prevHi);
-
-    // Estimate tokens removed
     let removedTokens = 0;
-    for (let i = lo; i <= hi; i++) {
+    for (let i = expandedRange.startIndex; i <= expandedRange.endIndex; i++) {
       removedTokens += estimateMessageTokens(messages[i]);
     }
 
-    // Remove the range (inclusive)
-    messages.splice(lo, hi - lo + 1);
+    messages.splice(expandedRange.startIndex, expandedRange.endIndex - expandedRange.startIndex + 1);
 
-    // Build synthetic user message for the compressed block
     const syntheticMsg = {
       role: "user",
       content: [
@@ -156,24 +203,19 @@ function applyCompressionBlocks(messages: any[], state: DcpState): any[] {
             "</dcp-block-id>",
         },
       ],
-      // anchorTimestamp is always finite (resolveAnchorTimestamp returns
-      // endTimestamp + 1 instead of Infinity), but guard against corrupted
-      // state from older sessions where Infinity/null could leak in.
       timestamp: Number.isFinite(block.anchorTimestamp) ? block.anchorTimestamp - 0.5 : block.endTimestamp + 0.5,
     };
 
-    // Estimate tokens added by the summary
     const addedTokens = estimateMessageTokens(syntheticMsg);
 
-    // Insert the synthetic message
     messages.push(syntheticMsg);
-
-    // Re-sort by timestamp
     messages.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
 
-    // Update tokens saved
     const saved = removedTokens - addedTokens;
-    if (saved > 0) state.tokensSaved += saved;
+    if (saved > 0 && !block.savingsApplied) {
+      state.tokensSaved += saved;
+      block.savingsApplied = true;
+    }
   }
 
   return messages;
@@ -187,7 +229,6 @@ function applyCompressionBlocks(messages: any[], state: DcpState): any[] {
  * This is a safety net that runs after all compression blocks are applied.
  */
 function repairOrphanedToolPairs(messages: any[]): void {
-  // 1. Build set of all toolCall IDs present in assistant messages
   const assistantToolCallIds = new Set<string>();
   for (const msg of messages) {
     if (msg.role !== "assistant") continue;
@@ -199,7 +240,6 @@ function repairOrphanedToolPairs(messages: any[]): void {
     }
   }
 
-  // 2. Build set of all toolCallIds present in toolResult/bashExecution messages
   const resultToolCallIds = new Set<string>();
   for (const msg of messages) {
     if (msg.role !== "toolResult" && msg.role !== "bashExecution") continue;
@@ -208,7 +248,6 @@ function repairOrphanedToolPairs(messages: any[]): void {
     }
   }
 
-  // 3. Remove orphaned toolResult/bashExecution messages (no matching assistant toolCall)
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.role !== "toolResult" && msg.role !== "bashExecution") continue;
@@ -217,7 +256,6 @@ function repairOrphanedToolPairs(messages: any[]): void {
     }
   }
 
-  // 4. Strip orphaned toolCall blocks from assistant messages (no matching toolResult)
   for (const msg of messages) {
     if (msg.role !== "assistant") continue;
     const content: any[] = Array.isArray(msg.content) ? msg.content : [];
@@ -229,9 +267,7 @@ function repairOrphanedToolPairs(messages: any[]): void {
       return typeof block.id === "string" && resultToolCallIds.has(block.id);
     });
 
-    // Only update if we actually removed something
     if (filtered.length !== content.length) {
-      // If the assistant has no content left at all, keep at least an empty array
       msg.content = filtered.length > 0 ? filtered : [];
     }
   }
@@ -245,21 +281,19 @@ function applyDeduplication(messages: any[], state: DcpState, config: DcpConfig)
   if (!config.strategies.deduplication.enabled) return;
   if (state.manualMode && !config.manualMode.automaticStrategies) return;
 
-  const protectedTools = new Set([
-    ...ALWAYS_PROTECTED_DEDUP,
-    ...(config.strategies.deduplication.protectedTools ?? []),
-  ]);
+  const protectedTools = getProtectedTools(
+    config,
+    config.strategies.deduplication.protectedTools,
+  );
 
-  // fingerprint → array of toolCallIds in timestamp order
   const fingerprintMap = new Map<string, string[]>();
 
   for (const msg of messages) {
     if (msg.role !== "toolResult") continue;
-    const toolName: string = msg.toolName ?? "";
-    if (protectedTools.has(toolName)) continue;
 
-    // Look up the fingerprint from the recorded tool call
     const record = state.toolCalls.get(msg.toolCallId);
+    const toolName = resolveToolName(record, msg.toolName);
+    if (protectedTools.has(toolName)) continue;
     if (!record) continue;
 
     const fp = record.inputFingerprint;
@@ -269,13 +303,10 @@ function applyDeduplication(messages: any[], state: DcpState, config: DcpConfig)
     fingerprintMap.get(fp)!.push(msg.toolCallId);
   }
 
-  // For each fingerprint with duplicates, prune all but the last
   for (const [, ids] of fingerprintMap) {
     if (ids.length <= 1) continue;
-    // Keep the last one; prune the rest
     for (let i = 0; i < ids.length - 1; i++) {
-      state.prunedToolIds.add(ids[i]);
-      state.totalPruneCount++;
+      markToolPruned(state, ids[i]!);
     }
   }
 }
@@ -288,22 +319,23 @@ function applyErrorPurging(messages: any[], state: DcpState, config: DcpConfig):
   if (!config.strategies.purgeErrors.enabled) return;
   if (state.manualMode && !config.manualMode.automaticStrategies) return;
 
-  const protectedTools = new Set(config.strategies.purgeErrors.protectedTools ?? []);
+  const protectedTools = getProtectedTools(
+    config,
+    config.strategies.purgeErrors.protectedTools,
+  );
   const turnsThreshold = config.strategies.purgeErrors.turns ?? 3;
 
   for (const msg of messages) {
     if (msg.role !== "toolResult") continue;
     if (!msg.isError) continue;
 
-    const toolName: string = msg.toolName ?? "";
-    if (protectedTools.has(toolName)) continue;
-
     const record = state.toolCalls.get(msg.toolCallId);
+    const toolName = resolveToolName(record, msg.toolName);
+    if (protectedTools.has(toolName)) continue;
     if (!record) continue;
 
     if (state.currentTurn - record.turnIndex >= turnsThreshold) {
-      state.prunedToolIds.add(msg.toolCallId);
-      state.totalPruneCount++;
+      markToolPruned(state, msg.toolCallId);
     }
   }
 }
@@ -340,7 +372,6 @@ function applyToolOutputPruning(messages: any[], state: DcpState): void {
  * Updates state.messageIdSnapshot.
  */
 function injectMessageIds(messages: any[], state: DcpState): void {
-  // Clear the snapshot and rebuild
   state.messageIdSnapshot.clear();
 
   let counter = 1;
@@ -348,9 +379,7 @@ function injectMessageIds(messages: any[], state: DcpState): void {
   for (const msg of messages) {
     const role: string = msg.role ?? "";
 
-    // Skip PI-internal passthrough messages
     if (PASSTHROUGH_ROLES.has(role)) continue;
-    // Skip non-eligible roles
     if (!ID_ELIGIBLE_ROLES.has(role)) continue;
 
     const id = "m" + String(counter).padStart(3, "0");
@@ -380,10 +409,8 @@ function injectMessageIds(messages: any[], state: DcpState): void {
         );
         const idBlock = { type: "text", text: idTag };
         if (firstToolCallIdx === -1) {
-          // No tool_use blocks — append as usual
           msg.content = [...msg.content, idBlock];
         } else {
-          // Insert immediately before the first tool_use block
           msg.content = [
             ...msg.content.slice(0, firstToolCallIdx),
             idBlock,
@@ -422,29 +449,24 @@ export function applyPruning(
     return clone;
   });
 
-  // 1. Count user turns → update state.currentTurn
   state.currentTurn = msgs.filter((m) => m.role === "user").length;
 
-  // 2. Apply active compression blocks
   applyCompressionBlocks(msgs, state);
-
-  // 2b. Post-compression safety net: remove any orphaned tool pairs that the
-  // expansion logic could not catch (e.g. multi-block interactions, pre-broken state).
   repairOrphanedToolPairs(msgs);
-
-  // 3. Apply deduplication
   applyDeduplication(msgs, state, config);
-
-  // 4. Apply error purging
   applyErrorPurging(msgs, state, config);
-
-  // 5. Apply explicit tool output pruning (prunedToolIds)
   applyToolOutputPruning(msgs, state);
-
-  // 6. Inject message IDs into visible messages
   injectMessageIds(msgs, state);
 
-  // 7. state.messageIdSnapshot is already updated by injectMessageIds
+  state.visibleMessagesSnapshot = msgs.map((m: any) => {
+    const clone = { ...m };
+    if (Array.isArray(clone.content)) {
+      clone.content = clone.content.map((block: any) =>
+        typeof block === "object" && block !== null ? { ...block } : block,
+      );
+    }
+    return clone;
+  });
 
   return msgs;
 }

@@ -6,19 +6,21 @@
 
 - **Global config path moved** — DCP now loads its global user config from `~/.pi/agent/dcp.jsonc` instead of `~/.config/pi/dcp.jsonc`. Existing global configs should be moved to the new path.
 - **Above-max nudges now fire immediately** — `context-soft` and `context-strong` nudges fire on every `context` event once usage exceeds `maxContextPercent`. `nudgeFrequency` now only gates the mid-band `turn`/`iteration` nudges between `minContextPercent` and `maxContextPercent`.
+- **Hierarchical decompression behavior** — `/dcp decompress N` now understands roll-up parents and reactivates their direct child blocks instead of always flattening back to raw history.
 
 ### Added
 
 - **Minimum compress-range enforcement** (`compress.minRangeMessages`) — when set above `0`, the `compress` tool rejects any range whose visible span is smaller than the configured minimum consecutive conversation items. The default remains `0`, which keeps the feature disabled unless explicitly configured. The span is measured from the currently visible conversation, so active compressed blocks count as a single visible item.
 - **Compressed-block boundary metadata** — synthetic compressed messages are surfaced as `[Compressed section: <topic>]` and include a `<dcp-block-id>bN</dcp-block-id>` tag so later `compress` calls can reference block boundaries and use `(bN)` placeholders safely.
+- **Hierarchical roll-up compression** — compression ranges may now fully contain active compressed blocks, producing a parent block that supersedes those children. Roll-up summaries are strictly validated to require each contained `(bN)` placeholder exactly once, and partial overlap with active blocks is still rejected.
 
 ## [1.0.7] - 2026-04-14
 
 ### Fixed
 
 - **Infinity anchorTimestamp ghost block spiral** — When a `compress` range extended to the end of the conversation, `resolveAnchorTimestamp` returned `Infinity`. `JSON.stringify(Infinity)` serialises to `null`, so on session restore the corrupted block's timestamps coerced to `0` in JS overlap checks, making every new range appear to overlap the ghost block and trapping the model in a compression spiral (101 failures over 2 hours). `resolveAnchorTimestamp` now returns `endTimestamp + 1` instead of `Infinity`.
-- **Corrupted block propagation on session restore** — `index.ts` now filters out any persisted compression block whose `startTimestamp`, `endTimestamp`, or `anchorTimestamp` is non-finite before restoring state, preventing ghost blocks from surviving across sessions.
-- **Non-finite timestamp guard** — All code paths that create or apply compression blocks now validate timestamps are finite before proceeding, failing fast rather than silently corrupting state.
+- **Corrupted block propagation on session restore** — `index.ts` filters out persisted compression blocks whose `startTimestamp` or `endTimestamp` is non-finite before restoring state. Legacy non-finite `anchorTimestamp` values are tolerated and repaired during restore instead of being treated as valid block boundaries.
+- **Non-finite timestamp guard** — New compression blocks now use finite anchors, and runtime pruning paths validate the raw start/end timestamps they depend on before proceeding.
 - **Overlap error diagnostics** — Overlap error messages now include the existing block's timestamp range to aid debugging.
 - **Prompt tag name mismatch** — The prompt tag was named `<dcp-message-id>` but the code injected `<dcp-id>`; tag name corrected to `<dcp-id>` throughout `prompts.ts`.
 - **Duplicate test** — Removed a duplicate test case from `pruner.test.ts`.

@@ -1,14 +1,9 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent"
 import type { AutocompleteItem } from "@mariozechner/pi-tui"
+import { getProtectedTools, resolveToolName } from "./protected-tools.js"
+import { markToolPruned } from "./state.js"
 import type { DcpState } from "./state.js"
 import type { DcpConfig } from "./config.js"
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/** Tools whose outputs are always protected from sweep regardless of config. */
-const ALWAYS_PROTECTED_TOOLS = ["compress", "write", "edit"] as const
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -18,6 +13,30 @@ function fmt(n: number): string {
   return n.toLocaleString()
 }
 
+function formatBlockIdList(blockIds: number[]): string {
+  return blockIds.map((id) => `b${id}`).join(", ")
+}
+
+function getDirectChildBlocks(state: DcpState, block: DcpState["compressionBlocks"][number]): {
+  children: DcpState["compressionBlocks"]
+  missingChildIds: number[]
+} {
+  const childIds = block.supersedesBlockIds ?? []
+  const children: DcpState["compressionBlocks"] = []
+  const missingChildIds: number[] = []
+
+  for (const id of childIds) {
+    const child = state.compressionBlocks.find((candidate) => candidate.id === id)
+    if (child) {
+      children.push(child)
+    } else {
+      missingChildIds.push(id)
+    }
+  }
+
+  return { children, missingChildIds }
+}
+
 // ---------------------------------------------------------------------------
 // Help
 // ---------------------------------------------------------------------------
@@ -25,15 +44,16 @@ function fmt(n: number): string {
 const HELP_TEXT = `DCP — Dynamic Context Pruning
 
 Commands:
+  /dcp help         — Show command reference
   /dcp context      — Show context window usage breakdown
   /dcp stats        — Show pruning statistics for this session
-  /dcp sweep [N]    — Prune last N tool outputs (default: all since last user msg)
+  /dcp sweep [N]    — Prune last N unprotected tool outputs (default: all unprotected outputs since last user msg)
   /dcp manual       — Show manual mode status
   /dcp manual on    — Enable manual mode (disable autonomous compression)
   /dcp manual off   — Disable manual mode (enable autonomous compression)
-  /dcp decompress   — List active compression blocks
-  /dcp decompress N — Restore compression block N
-  /dcp compress     — Trigger compression (sends compress tool invocation to LLM)`
+  /dcp decompress   — List active and superseded compression blocks
+  /dcp decompress N — Decompress block N (reactivates direct children for roll-ups)
+  /dcp compress     — Trigger compression (sends a hidden follow-up asking the LLM to use the compress tool)`
 
 function handleHelp(ctx: ExtensionCommandContext): void {
   ctx.ui.notify(HELP_TEXT, "info")
@@ -66,7 +86,7 @@ function handleContext(ctx: ExtensionCommandContext, state: DcpState): void {
   lines.push(`  Tool calls tracked: ${fmt(state.toolCalls.size)}`)
   lines.push(`  Pruned tools: ${fmt(state.prunedToolIds.size)}`)
   lines.push(`  Compression blocks: ${state.compressionBlocks.filter((b) => b.active).length}`)
-  lines.push(`  Tokens saved (estimated): ${fmt(state.tokensSaved)}`)
+  lines.push(`  Compression tokens saved (estimated): ${fmt(state.tokensSaved)}`)
 
   ctx.ui.notify(lines.join("\n"), "info")
 }
@@ -81,7 +101,7 @@ function handleStats(ctx: ExtensionCommandContext, state: DcpState): void {
 
   const lines: string[] = []
   lines.push("DCP Session Statistics:")
-  lines.push(`  Tokens saved (estimated): ${fmt(state.tokensSaved)}`)
+  lines.push(`  Compression tokens saved (estimated): ${fmt(state.tokensSaved)}`)
   lines.push(`  Total pruning operations: ${fmt(state.totalPruneCount)}`)
   lines.push(`  Compression blocks active: ${activeBlocks} / ${totalBlocks} total`)
   lines.push(`  Manual mode: ${state.manualMode ? "on" : "off"}`)
@@ -103,19 +123,15 @@ async function handleSweep(
 
   const branch = ctx.sessionManager.getBranch()
 
-  // Build the full set of protected tool names.
-  const protectedTools = new Set<string>([
-    ...ALWAYS_PROTECTED_TOOLS,
-    ...config.strategies.deduplication.protectedTools,
-  ])
+  const protectedTools = getProtectedTools(
+    config,
+    config.strategies.deduplication.protectedTools,
+  )
 
-  // Walk the branch (root → leaf) collecting toolCallIds in encounter order,
-  // and tracking where the last real user message was.
-  const allToolCallIds: string[] = []
-  const toolCallIdsSinceLastUser: string[] = []
+  const allToolResults: Array<{ toolCallId: string; toolName: string }> = []
+  const toolResultsSinceLastUser: Array<{ toolCallId: string; toolName: string }> = []
   let lastUserMsgBranchIndex = -1
 
-  // First pass: find the last user message index.
   for (let i = 0; i < branch.length; i++) {
     const entry = branch[i]
     if (entry.type !== "message") continue
@@ -125,49 +141,45 @@ async function handleSweep(
     }
   }
 
-  // Second pass: collect tool result IDs in encounter order.
   for (let i = 0; i < branch.length; i++) {
     const entry = branch[i]
     if (entry.type !== "message") continue
     const msg = (entry as any).message
     if (msg.role !== "toolResult") continue
 
-    const toolCallId = msg.toolCallId as string
-    allToolCallIds.push(toolCallId)
+    const toolResult = {
+      toolCallId: msg.toolCallId as string,
+      toolName: typeof msg.toolName === "string" ? msg.toolName : "",
+    }
+    allToolResults.push(toolResult)
 
     if (lastUserMsgBranchIndex >= 0 && i > lastUserMsgBranchIndex) {
-      toolCallIdsSinceLastUser.push(toolCallId)
+      toolResultsSinceLastUser.push(toolResult)
     }
   }
 
-  // Determine the candidate set based on the N argument.
-  let candidates: string[]
-  if (n > 0) {
-    // Last N tool results from the full session branch.
-    candidates = allToolCallIds.slice(-n)
-  } else {
-    // All tool results since the last user message (or everything if no user
-    // message exists yet — e.g. in a purely agentic session).
-    candidates =
-      lastUserMsgBranchIndex >= 0 ? toolCallIdsSinceLastUser : allToolCallIds
-  }
+  const candidates =
+    n > 0
+      ? allToolResults
+      : lastUserMsgBranchIndex >= 0
+        ? toolResultsSinceLastUser
+        : allToolResults
 
-  // Filter: skip already-pruned IDs and protected tool names.
-  const toAdd = candidates.filter((toolCallId) => {
+  const eligible = candidates.filter(({ toolCallId, toolName }) => {
     if (state.prunedToolIds.has(toolCallId)) return false
 
-    // Tool name lookup: prefer the DCP tool-call record if tracked; fall back
-    // to the AgentMessage itself (msg.toolName is present on ToolResultMessage).
     const record = state.toolCalls.get(toolCallId)
-    const toolName = record?.toolName
+    const resolvedToolName = resolveToolName(record, toolName)
 
-    if (toolName !== undefined && protectedTools.has(toolName)) return false
+    if (resolvedToolName !== "" && protectedTools.has(resolvedToolName)) return false
 
     return true
   })
 
-  for (const toolCallId of toAdd) {
-    state.prunedToolIds.add(toolCallId)
+  const toAdd = n > 0 ? eligible.slice(-n) : eligible
+
+  for (const { toolCallId } of toAdd) {
+    markToolPruned(state, toolCallId)
   }
 
   const count = toAdd.length
@@ -186,14 +198,13 @@ function handleManual(
   if (subArg === "on") {
     state.manualMode = true
     ctx.ui.notify(
-      "Manual mode: on\nAutonomous compression is disabled. Use /dcp compress to trigger manually.",
+      "Manual mode: on\nAutonomous compression is disabled. Use /dcp compress or explicitly ask for compression in chat.",
       "info",
     )
   } else if (subArg === "off") {
     state.manualMode = false
     ctx.ui.notify("Manual mode: off\nAutonomous compression is enabled.", "info")
   } else {
-    // Status display (no argument).
     const status = state.manualMode ? "on" : "off"
     ctx.ui.notify(
       `Manual mode: ${status}\nWhen on: compress tool only fires when you explicitly request it.`,
@@ -212,51 +223,120 @@ function handleDecompress(
   nArg: string | undefined,
 ): void {
   if (nArg === undefined) {
-    // List all active compression blocks.
     const activeBlocks = state.compressionBlocks.filter((b) => b.active)
+    const supersededBlocks = state.compressionBlocks.filter(
+      (b) => !b.active && b.supersededByBlockId !== undefined,
+    )
 
-    if (activeBlocks.length === 0) {
-      ctx.ui.notify("No active compression blocks.", "info")
+    if (activeBlocks.length === 0 && supersededBlocks.length === 0) {
+      ctx.ui.notify("No compression blocks.", "info")
       return
     }
 
-    const lines: string[] = ["Active compression blocks:"]
-    for (const block of activeBlocks) {
-      lines.push(
-        `  b${block.id} — "${block.topic}" (est. ${fmt(block.summaryTokenEstimate)} tokens)`,
-      )
+    const lines: string[] = []
+
+    if (activeBlocks.length > 0) {
+      lines.push("Active compression blocks:")
+      for (const block of activeBlocks) {
+        const supersedes = block.supersedesBlockIds?.length
+          ? ` — supersedes ${formatBlockIdList(block.supersedesBlockIds)}`
+          : ""
+        lines.push(
+          `  b${block.id} — "${block.topic}" (est. ${fmt(block.summaryTokenEstimate)} tokens)${supersedes}`,
+        )
+      }
+    } else {
+      lines.push("Active compression blocks: none")
     }
+
+    if (supersededBlocks.length > 0) {
+      if (lines.length > 0) lines.push("")
+      lines.push("Superseded compression blocks:")
+      for (const block of supersededBlocks) {
+        lines.push(
+          `  b${block.id} — "${block.topic}" (superseded by b${block.supersededByBlockId})`,
+        )
+      }
+    }
+
     lines.push("")
-    lines.push("Run /dcp decompress N to restore a block.")
+    lines.push(
+      "Run /dcp decompress N to deactivate a block. Decompressing a roll-up parent reactivates its direct child blocks.",
+    )
 
     ctx.ui.notify(lines.join("\n"), "info")
-  } else {
-    // Restore block N.
-    const id = parseInt(nArg, 10)
+    return
+  }
 
-    if (isNaN(id)) {
+  const id = parseInt(nArg, 10)
+
+  if (isNaN(id)) {
+    ctx.ui.notify(
+      `Invalid block ID: "${nArg}". Usage: /dcp decompress N`,
+      "error",
+    )
+    return
+  }
+
+  const block = state.compressionBlocks.find((b) => b.id === id)
+
+  if (!block) {
+    ctx.ui.notify(`No compression block found with id ${id}.`, "error")
+    return
+  }
+
+  if (!block.active) {
+    if (block.supersededByBlockId !== undefined) {
       ctx.ui.notify(
-        `Invalid block ID: "${nArg}". Usage: /dcp decompress N`,
-        "error",
+        `Compression block b${id} is currently superseded by b${block.supersededByBlockId}. Decompress b${block.supersededByBlockId} to reactivate it.`,
+        "info",
       )
       return
     }
 
-    const block = state.compressionBlocks.find((b) => b.id === id)
-
-    if (!block) {
-      ctx.ui.notify(`No compression block found with id ${id}.`, "error")
-      return
-    }
-
-    if (!block.active) {
-      ctx.ui.notify(`Compression block b${id} is already decompressed.`, "info")
-      return
-    }
-
-    block.active = false
-    ctx.ui.notify(`Decompressed block b${id}: "${block.topic}"`, "info")
+    ctx.ui.notify(`Compression block b${id} is already decompressed.`, "info")
+    return
   }
+
+  const { children, missingChildIds } = getDirectChildBlocks(state, block)
+  const directChildren = children.sort((a, b) => a.id - b.id)
+
+  if (missingChildIds.length > 0) {
+    ctx.ui.notify(
+      `Cannot decompress block b${id}: missing direct child block${missingChildIds.length === 1 ? "" : "s"} ${formatBlockIdList(missingChildIds)}.`,
+      "error",
+    )
+    return
+  }
+
+  const inconsistentChildren = directChildren.filter(
+    (child) => child.active || child.supersededByBlockId !== id,
+  )
+  if (inconsistentChildren.length > 0) {
+    ctx.ui.notify(
+      `Cannot decompress block b${id}: child linkage is inconsistent for ${formatBlockIdList(inconsistentChildren.map((child) => child.id))}.`,
+      "error",
+    )
+    return
+  }
+
+  block.active = false
+
+  if (directChildren.length === 0) {
+    ctx.ui.notify(`Decompressed block b${id}: "${block.topic}"`, "info")
+    return
+  }
+
+  for (const child of directChildren) {
+    child.active = true
+    delete child.supersededByBlockId
+    delete child.supersededAt
+  }
+
+  ctx.ui.notify(
+    `Decompressed block b${id}: "${block.topic}"\nReactivated direct child block${directChildren.length === 1 ? "" : "s"}: ${formatBlockIdList(directChildren.map((child) => child.id))}`,
+    "info",
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -296,8 +376,8 @@ export function registerCommands(
         { value: "stats", label: "stats", description: "Show pruning statistics" },
         { value: "sweep", label: "sweep", description: "Prune tool outputs" },
         { value: "manual", label: "manual", description: "Toggle manual mode" },
-        { value: "decompress", label: "decompress", description: "List or restore compression blocks" },
-        { value: "compress", label: "compress", description: "Trigger LLM compression" },
+        { value: "decompress", label: "decompress", description: "List or decompress compression blocks" },
+        { value: "compress", label: "compress", description: "Ask the LLM to run compression" },
         { value: "help", label: "help", description: "Show help" },
       ]
       const matched = subcommands

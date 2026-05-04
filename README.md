@@ -54,7 +54,7 @@ Later layers override earlier scalar/object values. Array values are union-merge
   // "manualMode": { "enabled": true, "automaticStrategies": true },
 
   "compress": {
-    // Above 80 % context: fire an emergency nudge on every context event
+    // Above 80 % context: fire a max-context nudge on every context event
     "maxContextPercent": 0.8,
     // Below 40 % context: no nudges
     "minContextPercent": 0.4,
@@ -100,14 +100,14 @@ All commands are available in the pi TUI via `/dcp <subcommand>`:
 |---|---|
 | `/dcp` or `/dcp help` | Show command reference |
 | `/dcp context` | Show context window usage and session stats |
-| `/dcp stats` | Show pruning statistics (tokens saved, blocks, operations) |
-| `/dcp sweep [N]` | Mark last N tool outputs for pruning (default: all since last user message) |
+| `/dcp stats` | Show pruning statistics (estimated compression tokens saved, blocks, operations) |
+| `/dcp sweep [N]` | Mark the last N unprotected tool outputs for pruning (default: all unprotected outputs since the last user message; `compress`, `write`, `edit`, tools in `compress.protectedTools`, and tools in `strategies.deduplication.protectedTools` are skipped) |
 | `/dcp manual` | Show current manual mode status |
 | `/dcp manual on` | Enable manual mode — autonomous nudges disabled |
 | `/dcp manual off` | Disable manual mode — autonomous nudges re-enabled |
-| `/dcp compress` | Trigger LLM compression immediately (sends a followUp message) |
-| `/dcp decompress` | List all active compression blocks |
-| `/dcp decompress N` | Restore compression block `bN` (re-expands it in context) |
+| `/dcp compress` | Trigger LLM compression immediately (sends a hidden followUp message asking the LLM to use `compress`) |
+| `/dcp decompress` | List active and superseded compression blocks |
+| `/dcp decompress N` | Decompress numeric block ID `N` (for example, `/dcp decompress 3`); if block `bN` is a roll-up parent, its direct child blocks reactivate |
 
 ## How It Works
 
@@ -115,17 +115,24 @@ All commands are available in the pi TUI via `/dcp <subcommand>`:
 
 When the LLM calls the `compress` tool it provides a `topic` string and one or more `{startId, endId, summary}` ranges. DCP:
 
-1. Records the range as a `CompressionBlock` with start/end timestamps
-2. On every `context` event, splices out the raw messages in that range
-3. Injects a synthetic `[Compressed section: <topic>]` user message containing the summary
+1. Records each range as a `CompressionBlock` with start/end timestamps and an anchor position for reinsertion
+2. On every `context` event, splices out the raw messages in each active block range
+3. Injects a synthetic `[Compressed section: <topic>]` user message containing the stored summary
 4. Appends a `<dcp-block-id>bN</dcp-block-id>` metadata tag to that synthetic message so later compressions can reference the block directly
-5. Keeps the block state in the session so it survives restarts
+5. Keeps block state in the session so it survives restarts, including supersession metadata for roll-up compression
 
-Message IDs (`m001`, `m042`, etc.) and block IDs (`b1`, `b3`) are injected into the visible conversation so the LLM can reference exact boundaries. Active compression blocks cannot be recompressed as part of a new overlapping range unless they are decompressed first. The `compress.protectUserMessages` setting is currently reserved for future behavior and is not enforced yet.
+Message IDs (`m001`, `m042`, etc.) and block IDs (`b1`, `b3`) are injected into the visible conversation so the LLM can reference exact boundaries. DCP now supports **hierarchical roll-up compression**: a new range may fully contain existing active blocks, creating a parent block that supersedes those child blocks. Partial overlap is still rejected.
 
 If `compress.minRangeMessages` is set above `0`, each requested range must cover at least that many consecutive **visible** conversation items or the tool rejects the call and asks for a larger range. This count is based on what the model can currently see in context: raw messages count as one item each, and each active compressed block also counts as one visible item.
 
-When compressing a range that already includes compressed blocks, the summary should reference those blocks with `(bN)` placeholders. DCP expands each placeholder with the stored block summary before saving the new compressed section.
+When compressing a range that fully contains active compressed blocks, the summary must reference each contained block exactly once with `(bN)` placeholders and must not include unexpected `(bN)` placeholders. DCP validates those placeholders before accepting the call, expands each placeholder with the stored child summary, then marks the child blocks inactive so only the new parent summary is injected.
+
+Examples:
+
+- **Raw compression:** compress `m010..m040` into a new `b7` summary.
+- **Roll-up compression:** compress `b7..b9` with a summary containing `(b7)`, `(b8)`, and `(b9)` exactly once each, creating a new parent block and superseding those child blocks.
+
+Decompressing a non-parent block simply disables that block. Decompressing a roll-up parent disables the parent and reactivates its direct child blocks, preserving the hierarchy instead of immediately exposing all raw history.
 
 ### Atomic tool pair removal
 
@@ -156,10 +163,10 @@ A `DCP` badge is shown in the pi status bar. In manual mode it displays `DCP [ma
 
 ```bash
 npm install
-npx tsc --noEmit   # type-check without emitting
+bun run pruner.test.ts
 ```
 
-The extension is loaded by pi via [jiti](https://github.com/unjs/jiti) so TypeScript is executed directly — no build step required for normal use.
+The extension is loaded by pi via [jiti](https://github.com/unjs/jiti), so there is no build step and no configured standalone type-check command in this repository.
 
 ## Contributors
 

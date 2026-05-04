@@ -92,7 +92,7 @@ Compressed block IDs always use the \`bN\` form (never \`mNNN\`) and are injecte
 
 Rules:
 
-- Include every required block placeholder exactly once.
+- When your selected range fully contains active compressed blocks, include every required block placeholder exactly once.
 - Do not invent placeholders for blocks outside the selected range.
 - Treat \`(bN)\` placeholders as RESERVED TOKENS. Do not emit \`(bN)\` text anywhere except intentional placeholders.
 - If you need to mention a block in prose, use plain text like \`compressed bN\` (not as a placeholder).
@@ -125,7 +125,9 @@ Rules:
 - \`startId\` must appear before \`endId\`.
 - Do not invent IDs. Use only IDs that are present in context.
 - Some environments may require each range to cover a minimum number of consecutive visible conversation items; if a compress call is rejected for being too small, retry with a larger consecutive range.
-- Active compressed blocks remain protected from overlapping recompression; if you need to recompress across one, decompress it first.
+- You may roll up older compressed sections by selecting a range that fully contains active blocks.
+- Partial overlap with an active compressed block is rejected.
+- When a selected range fully contains active blocks, your summary must include each contained \`(bN)\` placeholder exactly once or the tool call will be rejected.
 
 BATCHING
 When multiple independent ranges are ready and their boundaries do not overlap, include all of them as separate entries in the \`ranges\` array of a single tool call. Each entry must have its own \`startId\`, \`endId\`, and \`summary\`.`
@@ -151,7 +153,11 @@ Only split into multiple compressions if one large range would reduce summary qu
 RANGE SELECTION
 Start from older, resolved history and capture as much stale context as safely possible in one pass.
 Avoid the newest active working slice unless it is clearly closed.
+If the visible context is already dominated by compressed sections, prefer a roll-up range that fully contains adjacent older \`bN\` blocks.
 Use visible injected boundary IDs for compression (\`mNNN\` for messages, \`bN\` for compressed blocks), and ensure \`startId\` appears before \`endId\`.
+
+ROLL-UP RULE
+If your selected range fully contains active compressed blocks, the summary must include each contained \`(bN)\` placeholder exactly once.
 
 SUMMARY REQUIREMENTS
 Your summary must cover all essential details from the selected range so work can continue without reopening raw messages.
@@ -169,9 +175,11 @@ Look for a closed, self-contained range that no longer needs to stay raw and com
 
 RANGE SELECTION
 Prefer older, resolved history. Avoid the newest active working slice unless it is clearly done.
+If the visible context is summary-heavy, prefer rolling up adjacent older \`bN\` blocks into a parent summary.
 Use visible boundary IDs (\`mNNN\` for messages, \`bN\` for compressed blocks) and ensure \`startId\` appears before \`endId\`.
 
 If multiple independent ranges are ready, batch them in a single \`compress\` call.
+If a selected range fully contains active compressed blocks, include each contained \`(bN)\` placeholder exactly once.
 If nothing is cleanly closed yet, continue — but compress at the earliest opportunity.
 </dcp-system-reminder>`
 
@@ -184,8 +192,9 @@ Evaluate the conversation for compressible ranges.
 
 If any range is cleanly closed and unlikely to be needed again, use the compress tool on it.
 If direction has shifted, compress earlier ranges that are now less relevant.
+If older visible context is mostly compressed summaries, prefer rolling those \`bN\` blocks up into a parent summary.
 
-Prefer small, closed-range compressions over one broad compression.
+Prefer small, closed-range compressions over one broad compression, unless a roll-up is the cleanest way to reduce summary-heavy context.
 The goal is to filter noise and distill key information so context accumulation stays under control.
 Keep active context uncompressed.
 </dcp-system-reminder>`
@@ -199,14 +208,15 @@ export const ITERATION_NUDGE = `<dcp-system-reminder>
 You've been iterating for a while after the last user message.
 
 If there is a closed portion that is unlikely to be referenced immediately (for example, finished research before implementation), use the compress tool on it now.
+If the visible context is already dominated by compressed sections, prefer a roll-up that fully contains adjacent \`bN\` blocks.
 
-Prefer multiple short, closed ranges over one large range when several independent slices are ready.
+Prefer multiple short, closed ranges over one large range when several independent slices are ready, unless a roll-up is the safer cleanup.
 </dcp-system-reminder>`
 
 /**
  * Replaces SYSTEM_PROMPT when manualMode.enabled = true.
  * The agent should NOT proactively compress — only compress when explicitly
- * requested by the user or when a context-limit nudge fires.
+ * requested by the user.
  */
 export const MANUAL_MODE_SYSTEM_PROMPT = `
 You are operating in DCP manual mode for context management.
@@ -217,7 +227,6 @@ In manual mode you do NOT proactively compress conversation content. Compression
 
 WHEN TO COMPRESS
 - Only when the user explicitly asks you to compress
-- Only when a \`<dcp-system-reminder>\` nudge instructs you to (context-limit emergency)
 - Never as background housekeeping or on your own initiative
 
 WHEN YOU DO COMPRESS
@@ -226,6 +235,7 @@ Apply the same quality standards as always:
 - Summaries must be EXHAUSTIVE — file paths, decisions, findings, exact constraints
 - Preserve user intent precisely; prefer direct quotes for short user messages
 - Use only boundary IDs visible in context (\`mNNN\` for messages, \`bN\` for compressed blocks)
+- When a selected range fully contains active compressed blocks, include each contained \`(bN)\` placeholder exactly once
 - Batch independent ranges in a single \`compress\` call when possible
 
 Do not compress active, still-needed context. Only compress ranges that are genuinely closed and whose raw form is no longer required.

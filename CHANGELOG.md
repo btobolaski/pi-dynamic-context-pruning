@@ -7,6 +7,7 @@
 - **Global config path moved** — DCP now loads its global user config from `~/.pi/agent/dcp.jsonc` instead of `~/.config/pi/dcp.jsonc`. Existing global configs should be moved to the new path.
 - **Above-max nudges now fire immediately** — `context-soft` and `context-strong` nudges fire on every `context` event once usage exceeds `maxContextPercent`. `nudgeFrequency` now only gates the mid-band `turn`/`iteration` nudges between `minContextPercent` and `maxContextPercent`.
 - **Hierarchical decompression behavior** — `/dcp decompress N` now understands roll-up parents and reactivates their direct child blocks instead of always flattening back to raw history.
+- **Roll-up guidance clarified** — Model-facing compression prompts and roll-up success messages now explicitly state that `(bN)` placeholders expand to already-compressed child summaries, child blocks are superseded, and future context renders the parent block rather than the children separately. No roll-up compression logic changed; only guidance and user-facing success messaging were clarified.
 
 ### Added
 

@@ -233,12 +233,7 @@ function classifyActiveBlockOverlap(
 }
 
 function extractBlockPlaceholderIds(summary: string): number[] {
-  const ids: number[] = []
-  summary.replace(/\(b(\d+)\)/g, (_match, idStr) => {
-    ids.push(parseInt(idStr, 10))
-    return _match
-  })
-  return ids
+  return [...summary.matchAll(/\(b(\d+)\)/g)].map((match) => parseInt(match[1]!, 10))
 }
 
 function formatBlockIds(blockIds: number[]): string {
@@ -505,17 +500,23 @@ export function registerCompressTool(
         }
       }
 
+      const sortedSupersededBlockIds = [...supersededBlockIds].sort((a, b) => a - b)
+      const rollupResultSuffix =
+        sortedSupersededBlockIds.length > 0
+          ? ` Rolled up ${formatBlockIds(sortedSupersededBlockIds)}; those child blocks are now inactive, so future context shows the new parent block instead of rendering the children separately.`
+          : ""
+
       return {
         content: [
           {
             type: "text",
-            text: `Compressed ${params.ranges.length} range(s): ${params.topic}`,
+            text: `Compressed ${params.ranges.length} range(s): ${params.topic}.${rollupResultSuffix}`,
           },
         ],
         details: {
           blockIds: newBlockIds,
           topic: params.topic,
-          supersededBlockIds: [...supersededBlockIds].sort((a, b) => a - b),
+          supersededBlockIds: sortedSupersededBlockIds,
         },
       }
     },

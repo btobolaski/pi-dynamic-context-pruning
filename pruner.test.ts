@@ -12,6 +12,15 @@ import assert from "assert";
 import { registerCommands } from "./commands.js";
 import { registerCompressTool } from "./compress-tool.js";
 import { loadConfig } from "./config.js";
+import {
+  COMPRESS_RANGE_DESCRIPTION,
+  CONTEXT_LIMIT_NUDGE_SOFT,
+  CONTEXT_LIMIT_NUDGE_STRONG,
+  ITERATION_NUDGE,
+  MANUAL_MODE_SYSTEM_PROMPT,
+  SYSTEM_PROMPT,
+  TURN_NUDGE,
+} from "./prompts.js";
 import { applyPruning, getNudgeType } from "./pruner.js";
 import type { DcpState } from "./state.js";
 import type { DcpConfig } from "./config.js";
@@ -65,6 +74,7 @@ async function executeCompressTool(
   state: DcpState,
   config: DcpConfig,
   params: { topic: string; ranges: Array<{ startId: string; endId: string; summary: string }> },
+  notifications: Array<{ message: string; level: string }> = [],
 ): Promise<any> {
   let tool: any = null;
 
@@ -87,7 +97,9 @@ async function executeCompressTool(
     () => {},
     {
       ui: {
-        notify() {},
+        notify(message: string, level: string) {
+          notifications.push({ message, level });
+        },
       },
     },
   );
@@ -130,6 +142,12 @@ async function executeDcpCommand(
   } as any);
 
   return notifications;
+}
+
+function assertIncludesAll(text: string, expected: string[], label: string): void {
+  for (const phrase of expected) {
+    assert.ok(text.includes(phrase), `FAIL — ${label} should include: ${phrase}`);
+  }
 }
 
 // Four-message sequence that exercises the bug:
@@ -1496,6 +1514,7 @@ function findOrphanedToolUse(result: any[]): string | null {
   state.nextBlockId = 4;
 
   const config = makeConfig();
+  config.pruneNotification = "detailed";
 
   const preRollupVisible = applyPruning(messages, state, config);
   const preRollupCompressedCount = preRollupVisible.filter(
@@ -1511,23 +1530,42 @@ function findOrphanedToolUse(result: any[]): string | null {
     "FAIL — expected three visible child compressed sections before the roll-up",
   );
 
-  const result = await executeCompressTool(state, config, {
-    topic: "rolled up slices",
-    ranges: [
-      {
-        startId: "b1",
-        endId: "b3",
-        summary:
-          "Combined closed work:\n\n(b1)\n\nThen the next resolved section concluded.\n\n(b2)\n\nFinally the last closed section completed.\n\n(b3)",
-      },
-    ],
-  });
+  const notifications: Array<{ message: string; level: string }> = [];
+  const result = await executeCompressTool(
+    state,
+    config,
+    {
+      topic: "rolled up slices",
+      ranges: [
+        {
+          startId: "b1",
+          endId: "b3",
+          summary:
+            "Combined closed work:\n\n(b1)\n\nThen the next resolved section concluded.\n\n(b2)\n\nFinally the last closed section completed.\n\n(b3)",
+        },
+      ],
+    },
+    notifications,
+  );
 
   assert.deepStrictEqual(result.details.blockIds, [4], "FAIL — expected parent block id b4");
   assert.deepStrictEqual(
     result.details.supersededBlockIds,
     [1, 2, 3],
     "FAIL — expected the roll-up result to report superseded child blocks",
+  );
+  const resultText = result.content?.[0]?.text ?? "";
+  assert.ok(
+    resultText.includes("Rolled up b1, b2, b3"),
+    "FAIL — expected roll-up result text to report superseded child blocks",
+  );
+  assert.ok(
+    resultText.includes("future context shows the new parent block"),
+    "FAIL — expected roll-up result text to explain future parent-only rendering",
+  );
+  assert.ok(
+    notifications[0]?.message.includes("rolled up b1, b2, b3"),
+    "FAIL — expected detailed notification to report rolled-up child blocks",
   );
 
   const parent = state.compressionBlocks.find((b) => b.id === 4);
@@ -3026,6 +3064,60 @@ function findOrphanedToolUse(result: any[]): string | null {
 
   console.log("  PASS: config.compress.protectedTools is honored by error purging");
   console.log("TEST 43 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 44 — ROLL-UP PROMPTS PRESERVE SEMANTIC GUIDANCE
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 44: roll-up prompt text preserves core semantics");
+
+  assertIncludesAll(
+    COMPRESS_RANGE_DESCRIPTION,
+    [
+      "already-compressed child summary",
+      "not to the original raw messages",
+      "marks the child block inactive/superseded",
+      "Future context injects only the new parent block",
+      "include every required block placeholder exactly once",
+    ],
+    "compress tool description",
+  );
+
+  assertIncludesAll(
+    SYSTEM_PROMPT,
+    [
+      "roll-up consolidates multiple active compressed blocks into one active parent block",
+    ],
+    "system prompt",
+  );
+
+  assertIncludesAll(
+    MANUAL_MODE_SYSTEM_PROMPT,
+    [
+      "already-compressed child summaries",
+      "not raw original messages",
+      "accepted roll-ups supersede child blocks",
+      "future context shows only the parent block",
+    ],
+    "manual mode prompt",
+  );
+
+  for (const [label, text] of [
+    ["strong nudge", CONTEXT_LIMIT_NUDGE_STRONG],
+    ["soft nudge", CONTEXT_LIMIT_NUDGE_SOFT],
+    ["turn nudge", TURN_NUDGE],
+    ["iteration nudge", ITERATION_NUDGE],
+  ] as const) {
+    assert.ok(text.includes("roll-up"), `FAIL — ${label} should mention roll-up`);
+    assert.ok(
+      /child summaries|child blocks|parent block|active parent/.test(text),
+      `FAIL — ${label} should describe parent/child roll-up semantics`,
+    );
+  }
+
+  console.log("  PASS: prompt and nudge text preserve roll-up semantics");
+  console.log("TEST 44 PASSED\n");
 }
 
 console.log("All tests passed.");

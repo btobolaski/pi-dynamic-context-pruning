@@ -23,6 +23,7 @@ Think of compression as phase transitions: raw exploration becomes refined under
 OPERATING STANCE
 Prefer short, closed, summary-safe compressions.
 When multiple independent stale sections exist, prefer several focused compressions (in parallel when possible) over one broad compression.
+When the visible context is mostly older compressed sections, roll them up: a roll-up consolidates multiple active compressed blocks into one active parent block for future turns.
 
 Use \`compress\` as steady housekeeping while you work.
 
@@ -98,7 +99,15 @@ Rules:
 - If you need to mention a block in prose, use plain text like \`compressed bN\` (not as a placeholder).
 - Preflight check before finalizing: the set of \`(bN)\` placeholders in your summary must exactly match the required set, with no duplicates.
 
-These placeholders are semantic references. They will be replaced with the full stored compressed block content when the tool processes your output.
+These placeholders are semantic references used only when you submit a roll-up summary. They are replaced when the tool processes your output, before the new parent block is stored.
+
+ROLL-UP SEMANTICS
+When a range contains active compressed blocks, a roll-up is a real compression, not a no-op.
+
+- \`(bN)\` is a submission-time reference to the already-compressed child summary, not to the original raw messages.
+- The tool expands each placeholder to the stored child summary text, stores one new parent summary, and marks the child block inactive/superseded.
+- Future context injects only the new parent block for that range. The child blocks are not separately rendered unless the parent is later decompressed.
+- Roll-ups can save future tokens by replacing several visible compressed section headers, block-id tags, and repeated scaffolding with one parent compressed section, while preserving all child-summary substance.
 
 FLOW PRESERVATION WITH PLACEHOLDERS
 When you use compressed block placeholders, write the surrounding summary text so it still reads correctly AFTER placeholder expansion.
@@ -106,7 +115,7 @@ When you use compressed block placeholders, write the surrounding summary text s
 - Treat each placeholder as a stand-in for a full conversation segment, not as a short label.
 - Ensure transitions before and after each placeholder preserve chronology and causality.
 - Do not write text that depends on the placeholder staying literal (for example, "as noted in \`(b2)\`").
-- Your final meaning must be coherent once each placeholder is replaced with its full compressed block content.
+- Your final meaning must be coherent once each placeholder is replaced with its stored child-summary text.
 
 BOUNDARY IDS
 You specify boundaries by ID using the injected IDs visible in the conversation:
@@ -153,11 +162,11 @@ Only split into multiple compressions if one large range would reduce summary qu
 RANGE SELECTION
 Start from older, resolved history and capture as much stale context as safely possible in one pass.
 Avoid the newest active working slice unless it is clearly closed.
-If the visible context is already dominated by compressed sections, prefer a roll-up range that fully contains adjacent older \`bN\` blocks.
+If the visible context is already dominated by compressed sections, prefer a roll-up range that fully contains adjacent older \`bN\` blocks. Roll-up consolidates multiple active compressed sections into one active parent; placeholders expand to already-compressed child summaries, not raw original messages.
 Use visible injected boundary IDs for compression (\`mNNN\` for messages, \`bN\` for compressed blocks), and ensure \`startId\` appears before \`endId\`.
 
 ROLL-UP RULE
-If your selected range fully contains active compressed blocks, the summary must include each contained \`(bN)\` placeholder exactly once.
+If your selected range fully contains active compressed blocks, the summary must include each contained \`(bN)\` placeholder exactly once. After acceptance, the parent block supersedes those child blocks so future context shows only the parent for that range.
 
 SUMMARY REQUIREMENTS
 Your summary must cover all essential details from the selected range so work can continue without reopening raw messages.
@@ -175,11 +184,11 @@ Look for a closed, self-contained range that no longer needs to stay raw and com
 
 RANGE SELECTION
 Prefer older, resolved history. Avoid the newest active working slice unless it is clearly done.
-If the visible context is summary-heavy, prefer rolling up adjacent older \`bN\` blocks into a parent summary.
+If the visible context is summary-heavy, prefer rolling up adjacent older \`bN\` blocks into a parent summary. Roll-up consolidates multiple active compressed sections into one active parent block for future context.
 Use visible boundary IDs (\`mNNN\` for messages, \`bN\` for compressed blocks) and ensure \`startId\` appears before \`endId\`.
 
 If multiple independent ranges are ready, batch them in a single \`compress\` call.
-If a selected range fully contains active compressed blocks, include each contained \`(bN)\` placeholder exactly once.
+If a selected range fully contains active compressed blocks, include each contained \`(bN)\` placeholder exactly once. This roll-up is useful even though placeholders expand during tool processing: child blocks become inactive, and future context shows one parent block instead of many child blocks.
 If nothing is cleanly closed yet, continue — but compress at the earliest opportunity.
 </dcp-system-reminder>`
 
@@ -192,7 +201,7 @@ Evaluate the conversation for compressible ranges.
 
 If any range is cleanly closed and unlikely to be needed again, use the compress tool on it.
 If direction has shifted, compress earlier ranges that are now less relevant.
-If older visible context is mostly compressed summaries, prefer rolling those \`bN\` blocks up into a parent summary.
+If older visible context is mostly compressed summaries, prefer rolling those \`bN\` blocks up into a parent summary. Roll-up placeholders inline already-compressed child summaries during tool processing; the child blocks are then superseded so future context shows only the parent block.
 
 Prefer small, closed-range compressions over one broad compression, unless a roll-up is the cleanest way to reduce summary-heavy context.
 The goal is to filter noise and distill key information so context accumulation stays under control.
@@ -208,7 +217,7 @@ export const ITERATION_NUDGE = `<dcp-system-reminder>
 You've been iterating for a while after the last user message.
 
 If there is a closed portion that is unlikely to be referenced immediately (for example, finished research before implementation), use the compress tool on it now.
-If the visible context is already dominated by compressed sections, prefer a roll-up that fully contains adjacent \`bN\` blocks.
+If the visible context is already dominated by compressed sections, prefer a roll-up that fully contains adjacent \`bN\` blocks. Roll-up is token-saving consolidation: placeholders expand to existing child summaries, then those children stop rendering separately.
 
 Prefer multiple short, closed ranges over one large range when several independent slices are ready, unless a roll-up is the safer cleanup.
 </dcp-system-reminder>`
@@ -236,6 +245,7 @@ Apply the same quality standards as always:
 - Preserve user intent precisely; prefer direct quotes for short user messages
 - Use only boundary IDs visible in context (\`mNNN\` for messages, \`bN\` for compressed blocks)
 - When a selected range fully contains active compressed blocks, include each contained \`(bN)\` placeholder exactly once
+- Treat roll-up placeholders as references to already-compressed child summaries, not raw original messages; accepted roll-ups supersede child blocks so future context shows only the parent block for that range
 - Batch independent ranges in a single \`compress\` call when possible
 
 Do not compress active, still-needed context. Only compress ranges that are genuinely closed and whose raw form is no longer required.

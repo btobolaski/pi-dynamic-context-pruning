@@ -59,7 +59,8 @@ Later layers override earlier scalar/object values. Array values are union-merge
     // Below 40 % context: no nudges
     "minContextPercent": 0.4,
     // Minimum visible conversation items per compress range (0 disables)
-    // Raw messages count individually; each active compressed block counts as 1
+    // Visible conversation items count individually, including passthrough entries;
+    // each active compressed block counts as 1 visible item
     "minRangeMessages": 0,
     // How many context events between mid-band turn/iteration nudges
     "nudgeFrequency": 5,
@@ -123,14 +124,15 @@ When the LLM calls the `compress` tool it provides a `topic` string and one or m
 
 Message IDs (`m001`, `m042`, etc.) and block IDs (`b1`, `b3`) are injected into the visible conversation so the LLM can reference exact boundaries. DCP now supports **hierarchical roll-up compression**: a new range may fully contain existing active blocks, creating a parent block that supersedes those child blocks. Partial overlap is still rejected.
 
-If `compress.minRangeMessages` is set above `0`, each requested range must cover at least that many consecutive **visible** conversation items or the tool rejects the call and asks for a larger range. This count is based on what the model can currently see in context: raw messages count as one item each, and each active compressed block also counts as one visible item.
+If `compress.minRangeMessages` is set above `0`, each requested range must cover at least that many consecutive **visible** conversation items or the tool rejects the call and asks for a larger range. This count is based on what the model can currently see in context: every visible conversation item counts once, including raw messages and visible passthrough entries, and each active compressed block also counts as one visible item.
 
-When compressing a range that fully contains active compressed blocks, the summary must reference each contained block exactly once with `(bN)` placeholders and must not include unexpected `(bN)` placeholders. DCP validates those placeholders before accepting the call, expands each placeholder with the stored child summary, then marks the child blocks inactive so only the new parent summary is injected.
+When compressing a range that fully contains active compressed blocks, the summary must reference each contained block exactly once with bare `(bN)` placeholders, must not include unexpected `(bN)` placeholders, and must still contain substantive authored parent text after those placeholders are removed. Placeholders wrapped in inline code spans, fenced code blocks, or indented code blocks are rejected. DCP validates both the placeholder coverage and the remaining parent summary text before accepting the call, removes the placeholders before storage, then marks the child blocks inactive so only the new parent summary is injected.
 
 Examples:
 
 - **Raw compression:** compress `m010..m040` into a new `b7` summary.
-- **Roll-up compression:** compress `b7..b9` with a summary containing `(b7)`, `(b8)`, and `(b9)` exactly once each, creating a new parent block and superseding those child blocks.
+- **Roll-up compression:** compress `b7..b9` with a newly authored parent summary that includes `(b7)`, `(b8)`, and `(b9)` exactly once each and still reads coherently after those placeholders are removed, creating a new parent block and superseding those child blocks.
+- **Mixed roll-up compression:** compress a closed range like `m010..m018` that fully contains `b7`; include `(b7)` exactly once in the parent summary so the resulting block covers both the surrounding raw messages and the superseded child block.
 
 Decompressing a non-parent block simply disables that block. Decompressing a roll-up parent disables the parent and reactivates its direct child blocks, preserving the hierarchy instead of immediately exposing all raw history.
 

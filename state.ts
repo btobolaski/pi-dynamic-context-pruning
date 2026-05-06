@@ -63,10 +63,10 @@ export interface CompressionBlock {
   supersededAt?: number
   /** Token estimate for the summary text itself */
   summaryTokenEstimate: number
+  /** Estimated net tokens saved by this active block on the latest pruning pass */
+  tokensSavedEstimate?: number
   /** Wall-clock time the block was created (Date.now()) */
   createdAt: number
-  /** Whether this block's token savings have already been counted */
-  savingsApplied?: boolean
 }
 
 /**
@@ -147,6 +147,13 @@ export function markToolPruned(state: DcpState, toolCallId: string): boolean {
   state.prunedToolIds.add(toolCallId)
   state.totalPruneCount++
   return true
+}
+
+/** Recompute the current active compression token-savings estimate. */
+export function recomputeCompressionTokensSaved(state: DcpState): void {
+  state.tokensSaved = state.compressionBlocks
+    .filter((block) => block.active)
+    .reduce((sum, block) => sum + Math.max(0, block.tokensSavedEstimate ?? 0), 0)
 }
 
 // ---------------------------------------------------------------------------

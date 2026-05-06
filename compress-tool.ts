@@ -7,6 +7,7 @@ import { Type } from "@sinclair/typebox"
 import type { DcpConfig } from "./config.js"
 import { COMPRESS_RANGE_DESCRIPTION } from "./prompts.js"
 import { estimateTokens, expandCompressionRange } from "./pruner.js"
+import { recomputeCompressionTokensSaved } from "./state.js"
 import type { CompressionBlock, DcpState } from "./state.js"
 
 // ---------------------------------------------------------------------------
@@ -21,7 +22,7 @@ type ValidatedRange = {
   startTimestamp: number
   endTimestamp: number
   anchorTimestamp: number
-  expandedSummary: string
+  storedSummary: string
   containedBlockIds: number[]
 }
 
@@ -30,17 +31,36 @@ type ValidatedRange = {
 // ---------------------------------------------------------------------------
 
 /**
- * Replace `(bN)` placeholders in a summary with the stored content of the
- * referenced compression block. Unrecognised placeholders are left as-is.
+ * Remove `(bN)` placeholders from a roll-up summary before storage.
+ *
+ * Placeholders are validation/coverage markers, not expansion macros. The
+ * stored parent summary should be a newly synthesized summary that remains
+ * coherent after those markers are stripped.
  */
-function expandBlockPlaceholders(summary: string, state: DcpState): string {
-  return summary.replace(/\(b(\d+)\)/g, (match, idStr) => {
-    const id = parseInt(idStr, 10)
-    const block = state.compressionBlocks.find((b) => b.id === id && b.active)
-    return block
-      ? `[Previously compressed: ${block.topic}]\n${block.summary}`
-      : match
-  })
+function stripBlockPlaceholders(summary: string): string {
+  return summary
+    .replace(/\(b[1-9]\d*\)/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+}
+
+/**
+ * Require some meaningful prose after placeholder removal so roll-ups cannot
+ * supersede child blocks with an effectively empty markdown shell.
+ */
+function hasSubstantiveSummaryText(summary: string): boolean {
+  const normalized = summary
+    .replace(/<[^>]*>/g, " ")
+    .replace(/[`*_>#~\-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+
+  if (normalized.length === 0) return false
+
+  const lettersOnly = normalized.replace(/[^\p{L}]+/gu, "")
+  const wordWithLetter = normalized.match(/[\p{L}][\p{L}\p{N}]*/gu) ?? []
+  return wordWithLetter.length >= 2 || lettersOnly.length >= 9
 }
 
 /**
@@ -83,9 +103,13 @@ function resolveIdToTimestamp(
  * visible conversation. We never use Infinity because it corrupts JSON
  * serialization (becomes null) and breaks numeric comparisons.
  */
-function resolveAnchorTimestamp(endVisibleTimestamp: number, state: DcpState): number {
+function resolveAnchorTimestamp(
+  endVisibleTimestamp: number,
+  visibleMessages: Array<{ timestamp: number }>,
+): number {
   let anchor: number | null = null
-  for (const ts of state.messageIdSnapshot.values()) {
+  for (const message of visibleMessages) {
+    const ts = message.timestamp
     if (ts > endVisibleTimestamp && (anchor === null || ts < anchor)) {
       anchor = ts
     }
@@ -119,6 +143,7 @@ function countVisibleItemsInRange(
   startId: string,
   endId: string,
   state: DcpState,
+  visibleMessages: Array<{ timestamp: number }>,
 ): number {
   const visibleStartTimestamp = resolveIdToVisibleTimestamp(startId, state)
   const visibleEndTimestamp = resolveIdToVisibleTimestamp(endId, state)
@@ -129,14 +154,12 @@ function countVisibleItemsInRange(
     )
   }
 
-  let visibleCount = 0
-  for (const timestamp of state.messageIdSnapshot.values()) {
-    if (timestamp >= visibleStartTimestamp && timestamp <= visibleEndTimestamp) {
-      visibleCount += 1
-    }
-  }
-
-  return visibleCount
+  return visibleMessages.filter(
+    (message) =>
+      Number.isFinite(message.timestamp) &&
+      message.timestamp >= visibleStartTimestamp &&
+      message.timestamp <= visibleEndTimestamp,
+  ).length
 }
 
 function extractVisibleBlockId(message: any): number | null {
@@ -233,7 +256,38 @@ function classifyActiveBlockOverlap(
 }
 
 function extractBlockPlaceholderIds(summary: string): number[] {
-  return [...summary.matchAll(/\(b(\d+)\)/g)].map((match) => parseInt(match[1]!, 10))
+  return [...summary.matchAll(/\(b([1-9]\d*)\)/g)].map((match) => parseInt(match[1]!, 10))
+}
+
+function hasWrappedBlockPlaceholders(summary: string): boolean {
+  const placeholderPattern = /\(b[1-9]\d*\)/
+
+  for (const match of summary.matchAll(/(`+)([\s\S]*?)\1/g)) {
+    if (placeholderPattern.test(match[2] ?? "")) return true
+  }
+
+  for (const match of summary.matchAll(/(~~~+)([\s\S]*?)\1/g)) {
+    if (placeholderPattern.test(match[2] ?? "")) return true
+  }
+
+  const lines = summary.split(/\r?\n/)
+  let indentedBlock = ""
+  const flushIndentedBlock = (): boolean => {
+    if (indentedBlock.length === 0) return false
+    const hasPlaceholder = placeholderPattern.test(indentedBlock)
+    indentedBlock = ""
+    return hasPlaceholder
+  }
+
+  for (const line of lines) {
+    if (/^(?: {4}|\t)/.test(line)) {
+      indentedBlock += line + "\n"
+      continue
+    }
+    if (flushIndentedBlock()) return true
+  }
+
+  return flushIndentedBlock()
 }
 
 function formatBlockIds(blockIds: number[]): string {
@@ -246,6 +300,12 @@ function validateContainedBlockPlaceholders(
   startId: string,
   endId: string,
 ): void {
+  if (hasWrappedBlockPlaceholders(summary)) {
+    throw new Error(
+      `Roll-up compression range (${startId}..${endId}) must use bare (bN) placeholders. Do not wrap block placeholders in backticks or code formatting.`,
+    )
+  }
+
   const placeholderIds = extractBlockPlaceholderIds(summary)
   const expectedIds = [...containedBlockIds].sort((a, b) => a - b)
   const expectedIdSet = new Set(expectedIds)
@@ -328,7 +388,10 @@ export function registerCompressTool(
               "Complete technical summary replacing all content in range",
           }),
         }),
-        { description: "One or more ranges to compress" },
+        {
+          description: "One or more ranges to compress",
+          minItems: 1,
+        },
       ),
     }),
 
@@ -340,6 +403,10 @@ export function registerCompressTool(
         : 0
       const validatedRanges: ValidatedRange[] = []
       const visibleRangeMessages = buildVisibleRangeMessages(state)
+
+      if (params.ranges.length === 0) {
+        throw new Error("Compression requests must include at least one range.")
+      }
 
       for (const range of params.ranges) {
         const { startId, endId, summary } = range
@@ -369,7 +436,12 @@ export function registerCompressTool(
         }
 
         if (minRangeMessages > 0) {
-          const visibleItemsInRange = countVisibleItemsInRange(startId, endId, state)
+          const visibleItemsInRange = countVisibleItemsInRange(
+            startId,
+            endId,
+            state,
+            visibleRangeMessages,
+          )
           if (visibleItemsInRange < minRangeMessages) {
             throw new Error(
               `Compression range (${startId}..${endId}) covers only ${visibleItemsInRange} visible conversation item(s). ` +
@@ -438,13 +510,23 @@ export function registerCompressTool(
         const containedBlockIds = containedBlocks.map((block) => block.id)
         validateContainedBlockPlaceholders(summary, containedBlockIds, startId, endId)
 
+        const storedSummary = stripBlockPlaceholders(summary)
+        if (containedBlockIds.length > 0 && !hasSubstantiveSummaryText(storedSummary)) {
+          throw new Error(
+            `Compression range (${startId}..${endId}) must retain substantive summary text after block placeholders are removed.`,
+          )
+        }
+
         validatedRanges.push({
           startId,
           endId,
           startTimestamp,
           endTimestamp,
-          anchorTimestamp: resolveAnchorTimestamp(expandedRange.endVisibleTimestamp, state),
-          expandedSummary: expandBlockPlaceholders(summary, state),
+          anchorTimestamp: resolveAnchorTimestamp(
+            expandedRange.endVisibleTimestamp,
+            visibleRangeMessages,
+          ),
+          storedSummary,
           containedBlockIds,
         })
       }
@@ -454,14 +536,14 @@ export function registerCompressTool(
         const block: CompressionBlock = {
           id: state.nextBlockId++,
           topic: params.topic,
-          summary: range.expandedSummary,
+          summary: range.storedSummary,
           startTimestamp: range.startTimestamp,
           endTimestamp: range.endTimestamp,
           anchorTimestamp: range.anchorTimestamp,
           active: true,
           supersedesBlockIds:
             range.containedBlockIds.length > 0 ? [...range.containedBlockIds] : undefined,
-          summaryTokenEstimate: estimateTokens(range.expandedSummary),
+          summaryTokenEstimate: estimateTokens(range.storedSummary),
           createdAt,
         }
 
@@ -477,6 +559,8 @@ export function registerCompressTool(
           supersededBlockIds.add(childId)
         }
       }
+
+      recomputeCompressionTokensSaved(state)
 
       if (config.pruneNotification !== "off") {
         const count = params.ranges.length

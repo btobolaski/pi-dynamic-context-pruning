@@ -81,9 +81,10 @@ export default function (pi: ExtensionAPI) {
         const data = entry.data as any
 
         if (data?.compressionBlocks) {
-          // Filter out blocks with corrupted timestamps, then repair
-          // anchorTimestamp which is legitimately Infinity for blocks that
-          // extend to end-of-conversation (JSON round-trips Infinity as null).
+          // Filter out blocks with corrupted timestamps. Newly created blocks
+          // now use finite anchors, but legacy sessions may still contain
+          // non-finite anchorTimestamp values from older end-of-conversation
+          // blocks, and JSON round-trips Infinity as null.
           const validBlocks = data.compressionBlocks
             .filter(
               (b: any) =>
@@ -92,9 +93,10 @@ export default function (pi: ExtensionAPI) {
             )
             .map((b: any) => ({
               ...b,
-              // anchorTimestamp is Infinity when the block extends to the end
-              // of the conversation; JSON round-trips Infinity as null, so
-              // repair it here rather than discarding the block.
+              // Legacy sessions may contain non-finite anchorTimestamp values
+              // from older end-of-conversation blocks; normalize them here so
+              // downstream pruning can keep using a safe sentinel instead of a
+              // corrupted numeric anchor.
               anchorTimestamp: Number.isFinite(b.anchorTimestamp)
                 ? b.anchorTimestamp
                 : Infinity,

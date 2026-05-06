@@ -1,6 +1,6 @@
 import type { DcpConfig } from "./config.js";
 import { getProtectedTools, resolveToolName } from "./protected-tools.js";
-import { markToolPruned } from "./state.js";
+import { markToolPruned, recomputeCompressionTokensSaved } from "./state.js";
 import type { DcpState } from "./state.js";
 
 const ID_ELIGIBLE_ROLES = new Set(["user", "assistant", "toolResult", "bashExecution"]);
@@ -173,7 +173,16 @@ export function expandCompressionRange(
  */
 function applyCompressionBlocks(messages: any[], state: DcpState): any[] {
   const activeBlocks = state.compressionBlocks.filter((b) => b.active);
-  if (activeBlocks.length === 0) return messages;
+  if (activeBlocks.length === 0) {
+    state.tokensSaved = 0;
+    return messages;
+  }
+
+  for (const block of state.compressionBlocks) {
+    if (block.active) {
+      block.tokensSavedEstimate = 0;
+    }
+  }
 
   for (const block of activeBlocks) {
     if (!Number.isFinite(block.startTimestamp) || !Number.isFinite(block.endTimestamp)) continue;
@@ -211,13 +220,10 @@ function applyCompressionBlocks(messages: any[], state: DcpState): any[] {
     messages.push(syntheticMsg);
     messages.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
 
-    const saved = removedTokens - addedTokens;
-    if (saved > 0 && !block.savingsApplied) {
-      state.tokensSaved += saved;
-      block.savingsApplied = true;
-    }
+    block.tokensSavedEstimate = Math.max(0, removedTokens - addedTokens);
   }
 
+  recomputeCompressionTokensSaved(state);
   return messages;
 }
 

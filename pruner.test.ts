@@ -110,6 +110,7 @@ async function executeDcpCommand(
   config: DcpConfig,
   args: string,
   branch: any[] = [],
+  contextUsage: { tokens: number | null; contextWindow: number } | null = null,
 ): Promise<Array<{ message: string; level: string }>> {
   let command: any = null;
   const notifications: Array<{ message: string; level: string }> = [];
@@ -129,6 +130,9 @@ async function executeDcpCommand(
 
   await command.handler(args, {
     waitForIdle: async () => {},
+    getContextUsage() {
+      return contextUsage;
+    },
     ui: {
       notify(message: string, level: string) {
         notifications.push({ message, level });
@@ -1578,14 +1582,20 @@ function findOrphanedToolUse(result: any[]): string | null {
     "FAIL — expected the parent block to record its child block IDs",
   );
   assert.ok(
-    parentSummary.includes("First slice summary.") &&
-      parentSummary.includes("Second slice summary.") &&
-      parentSummary.includes("Third slice summary."),
-    "FAIL — expected the stored parent summary to include expanded child summaries",
+    !parentSummary.includes("First slice summary.") &&
+      !parentSummary.includes("Second slice summary.") &&
+      !parentSummary.includes("Third slice summary."),
+    "FAIL — expected the stored parent summary to avoid inlining child summaries",
+  );
+  assert.ok(
+    parentSummary.includes("Combined closed work:") &&
+      parentSummary.includes("Then the next resolved section concluded.") &&
+      parentSummary.includes("Finally the last closed section completed."),
+    "FAIL — expected the stored parent summary to preserve the authored parent text",
   );
   assert.ok(
     !parentSummary.includes("(b1)") && !parentSummary.includes("(b2)") && !parentSummary.includes("(b3)"),
-    "FAIL — expected roll-up placeholders to be expanded before storage",
+    "FAIL — expected roll-up placeholders to be removed before storage",
   );
 
   for (const childId of [1, 2, 3]) {
@@ -2419,6 +2429,9 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.deepStrictEqual(childParent?.supersedesBlockIds, [1, 2], "FAIL — expected b4 to supersede b1 and b2");
   assert.strictEqual(state.compressionBlocks[0]?.supersededByBlockId, 4, "FAIL — expected b1 to point at b4");
   assert.strictEqual(state.compressionBlocks[1]?.supersededByBlockId, 4, "FAIL — expected b2 to point at b4");
+  assert.ok(!childParent?.summary.includes("First leaf summary."), "FAIL — expected nested parent b4 to avoid inlining child b1 summary");
+  assert.ok(!childParent?.summary.includes("Second leaf summary."), "FAIL — expected nested parent b4 to avoid inlining child b2 summary");
+  assert.ok(!childParent?.summary.includes("(b1)") && !childParent?.summary.includes("(b2)"), "FAIL — expected nested parent b4 placeholders to be removed before storage");
 
   applyPruning(messages, state, config);
 
@@ -2438,6 +2451,9 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.deepStrictEqual(topParent?.supersedesBlockIds, [4, 3], "FAIL — expected b5 to supersede b4 and b3");
   assert.strictEqual(state.compressionBlocks[2]?.supersededByBlockId, 5, "FAIL — expected b3 to point at b5");
   assert.strictEqual(state.compressionBlocks[3]?.supersededByBlockId, 5, "FAIL — expected b4 to point at b5");
+  assert.ok(!topParent?.summary.includes("Third leaf summary."), "FAIL — expected top parent b5 to avoid inlining child b3 summary");
+  assert.ok(!topParent?.summary.includes("Child parent"), "FAIL — expected top parent b5 to avoid inlining child b4 summary text");
+  assert.ok(!topParent?.summary.includes("(b4)") && !topParent?.summary.includes("(b3)"), "FAIL — expected top parent b5 placeholders to be removed before storage");
 
   const topVisible = applyPruning(messages, state, config);
   const topVisibleText = JSON.stringify(topVisible);
@@ -2636,10 +2652,10 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 37 — TOKEN SAVINGS ARE COUNTED ONLY ONCE PER BLOCK
+// Test 37 — TOKEN SAVINGS STAY STABLE ACROSS REPEATED PASSES
 // ---------------------------------------------------------------------------
 {
-  console.log("TEST 37: tokensSaved does not grow on repeated application of the same block");
+  console.log("TEST 37: tokensSaved stays stable across repeated application of the same block");
 
   const messages: any[] = [
     { role: "user", content: [{ type: "text", text: "alpha ".repeat(80) }], timestamp: 1000 },
@@ -2671,7 +2687,11 @@ function findOrphanedToolUse(result: any[]): string | null {
     firstTokensSaved,
     "FAIL — repeated pruning passes should not recount savings for the same active block",
   );
-  assert.strictEqual(state.compressionBlocks[0]?.savingsApplied, true, "FAIL — expected the block to record that its savings were counted");
+  assert.strictEqual(
+    state.compressionBlocks[0]?.tokensSavedEstimate,
+    firstTokensSaved,
+    "FAIL — expected the block to retain its current token-savings estimate",
+  );
 
   console.log("  PASS: token savings remain stable across repeated pruning passes");
   console.log("TEST 37 PASSED\n");
@@ -3067,17 +3087,1145 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 44 — ROLL-UP PROMPTS PRESERVE SEMANTIC GUIDANCE
+// Test 44 — MIXED RAW + BLOCK ROLL-UP SUCCEEDS
 // ---------------------------------------------------------------------------
 {
-  console.log("TEST 44: roll-up prompt text preserves core semantics");
+  console.log("TEST 44: a roll-up can include raw messages plus a fully contained active block");
+
+  const messages: any[] = [
+    { role: "user", content: [{ type: "text", text: "raw before" }], timestamp: 1000 },
+    { role: "user", content: [{ type: "text", text: "child a" }], timestamp: 2000 },
+    { role: "user", content: [{ type: "text", text: "child b" }], timestamp: 3000 },
+    { role: "user", content: [{ type: "text", text: "raw after" }], timestamp: 4000 },
+    { role: "user", content: [{ type: "text", text: "tail" }], timestamp: 5000 },
+  ];
+
+  const state = makeState([
+    {
+      id: 1,
+      topic: "child block",
+      summary: "Child summary.",
+      startTimestamp: 2000,
+      endTimestamp: 3000,
+      anchorTimestamp: 4000,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+  ]);
+  state.nextBlockId = 2;
+
+  const config = makeConfig();
+  applyPruning(messages, state, config);
+
+  await executeCompressTool(state, config, {
+    topic: "mixed raw roll-up",
+    ranges: [
+      {
+        startId: "m001",
+        endId: "m003",
+        summary: "Raw setup happened.\n\n(b1)\n\nRaw follow-up was resolved.",
+      },
+    ],
+  });
+
+  const parent = state.compressionBlocks.find((b) => b.id === 2);
+  assert.ok(parent?.active, "FAIL — expected the mixed roll-up parent to be active");
+  assert.deepStrictEqual(parent?.supersedesBlockIds, [1], "FAIL — expected the mixed roll-up parent to supersede b1");
+  assert.strictEqual(parent?.startTimestamp, 1000, "FAIL — expected the mixed roll-up to include the leading raw message");
+  assert.strictEqual(parent?.endTimestamp, 4000, "FAIL — expected the mixed roll-up to include the trailing raw message");
+  assert.strictEqual(parent?.anchorTimestamp, 5000, "FAIL — expected the mixed roll-up parent to anchor on the next visible raw message");
+  assert.ok(!parent?.summary.includes("Child summary."), "FAIL — expected mixed roll-up parent summary to avoid inlining the child summary");
+  assert.ok(!parent?.summary.includes("(b1)"), "FAIL — expected mixed roll-up placeholder to be removed before storage");
+
+  const visible = applyPruning(messages, state, config);
+  const visibleText = JSON.stringify(visible);
+  assert.ok(visibleText.includes("b2</dcp-block-id>"), "FAIL — expected the mixed roll-up parent to be visible");
+  assert.ok(!visibleText.includes("b1</dcp-block-id>"), "FAIL — expected the child block to be hidden after mixed roll-up");
+  for (const ts of [1000, 2000, 3000, 4000]) {
+    assert.ok(!visible.some((m: any) => m.timestamp === ts), `FAIL — ts=${ts} should be hidden under the mixed roll-up parent`);
+  }
+  assert.ok(visible.some((m: any) => m.timestamp === 5000), "FAIL — expected the tail raw message to remain visible");
+
+  console.log("  PASS: mixed raw-plus-block roll-up creates a single parent block with the correct effective range");
+  console.log("TEST 44 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 45 — TERMINAL ROLL-UP USES A FINITE FALLBACK ANCHOR
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 45: a roll-up that reaches the end of visible context gets a finite fallback anchor");
+
+  const messages: any[] = [
+    { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
+    { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
+    { role: "user", content: [{ type: "text", text: "c" }], timestamp: 3000 },
+    { role: "user", content: [{ type: "text", text: "d" }], timestamp: 4000 },
+  ];
+
+  const state = makeState([
+    {
+      id: 1,
+      topic: "first child",
+      summary: "First child summary.",
+      startTimestamp: 1000,
+      endTimestamp: 2000,
+      anchorTimestamp: 3000,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+    {
+      id: 2,
+      topic: "second child",
+      summary: "Second child summary.",
+      startTimestamp: 3000,
+      endTimestamp: 4000,
+      anchorTimestamp: 4001,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+  ]);
+  state.nextBlockId = 3;
+
+  const config = makeConfig();
+  applyPruning(messages, state, config);
+
+  await executeCompressTool(state, config, {
+    topic: "terminal roll-up",
+    ranges: [
+      {
+        startId: "b1",
+        endId: "b2",
+        summary: "Terminal parent.\n\n(b1)\n\nThen\n\n(b2)",
+      },
+    ],
+  });
+
+  const parent = state.compressionBlocks.find((b) => b.id === 3);
+  assert.ok(parent?.active, "FAIL — expected the terminal roll-up parent to be active");
+  assert.ok(Number.isFinite(parent?.anchorTimestamp), "FAIL — expected the terminal roll-up anchor to be finite");
+  assert.notStrictEqual(JSON.parse(JSON.stringify(parent)).anchorTimestamp, null, "FAIL — expected the terminal roll-up anchor to survive JSON serialization");
+
+  const visible = applyPruning(messages, state, config);
+  const compressedSections = visible.filter(
+    (m: any) =>
+      m.role === "user" &&
+      Array.isArray(m.content) &&
+      typeof m.content[0]?.text === "string" &&
+      m.content[0].text.startsWith("[Compressed section:"),
+  );
+  assert.strictEqual(compressedSections.length, 1, "FAIL — expected only the terminal parent block to remain visible");
+  assert.ok(JSON.stringify(compressedSections[0]).includes("b3</dcp-block-id>"), "FAIL — expected the visible terminal parent block to be b3");
+
+  console.log("  PASS: terminal roll-ups use a finite fallback anchor and remain serializable");
+  console.log("TEST 45 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 46 — BATCHED ROLL-UPS CAN SUCCEED TOGETHER
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 46: multiple independent roll-up ranges can succeed in one batch");
+
+  const messages: any[] = [
+    { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
+    { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
+    { role: "user", content: [{ type: "text", text: "c" }], timestamp: 3000 },
+    { role: "user", content: [{ type: "text", text: "d" }], timestamp: 4000 },
+    { role: "user", content: [{ type: "text", text: "gap" }], timestamp: 4500 },
+    { role: "user", content: [{ type: "text", text: "e" }], timestamp: 5000 },
+    { role: "user", content: [{ type: "text", text: "f" }], timestamp: 6000 },
+    { role: "user", content: [{ type: "text", text: "g" }], timestamp: 7000 },
+    { role: "user", content: [{ type: "text", text: "h" }], timestamp: 8000 },
+    { role: "user", content: [{ type: "text", text: "tail" }], timestamp: 9000 },
+  ];
+
+  const state = makeState([
+    {
+      id: 1,
+      topic: "first pair a",
+      summary: "First pair a summary.",
+      startTimestamp: 1000,
+      endTimestamp: 2000,
+      anchorTimestamp: 3000,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+    {
+      id: 2,
+      topic: "first pair b",
+      summary: "First pair b summary.",
+      startTimestamp: 3000,
+      endTimestamp: 4000,
+      anchorTimestamp: 4500,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+    {
+      id: 3,
+      topic: "second pair a",
+      summary: "Second pair a summary.",
+      startTimestamp: 5000,
+      endTimestamp: 6000,
+      anchorTimestamp: 7000,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+    {
+      id: 4,
+      topic: "second pair b",
+      summary: "Second pair b summary.",
+      startTimestamp: 7000,
+      endTimestamp: 8000,
+      anchorTimestamp: 9000,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+  ]);
+  state.nextBlockId = 5;
+
+  const config = makeConfig();
+  applyPruning(messages, state, config);
+
+  const result = await executeCompressTool(
+    state,
+    config,
+    {
+      topic: "batched roll-up",
+      ranges: [
+        {
+          startId: "b1",
+          endId: "b2",
+          summary: "First parent.\n\n(b1)\n\nThen\n\n(b2)",
+        },
+        {
+          startId: "b3",
+          endId: "b4",
+          summary: "Second parent.\n\n(b3)\n\nThen\n\n(b4)",
+        },
+      ],
+    },
+  );
+
+  assert.deepStrictEqual(result.details.blockIds, [5, 6], "FAIL — expected two new parent block IDs from the batched roll-up");
+  assert.deepStrictEqual(result.details.supersededBlockIds, [1, 2, 3, 4], "FAIL — expected the batched roll-up result to report all superseded children");
+  assert.deepStrictEqual(state.compressionBlocks.find((b) => b.id === 5)?.supersedesBlockIds, [1, 2], "FAIL — expected b5 to supersede only the first pair");
+  assert.deepStrictEqual(state.compressionBlocks.find((b) => b.id === 6)?.supersedesBlockIds, [3, 4], "FAIL — expected b6 to supersede only the second pair");
+
+  const visible = applyPruning(messages, state, config);
+  const visibleText = JSON.stringify(visible);
+  assert.ok(visibleText.includes("b5</dcp-block-id>"), "FAIL — expected b5 to be visible after batched roll-up");
+  assert.ok(visibleText.includes("b6</dcp-block-id>"), "FAIL — expected b6 to be visible after batched roll-up");
+  assert.ok(visibleText.includes("gap"), "FAIL — expected the uncompressed gap message to remain visible between batched roll-up parents");
+  assert.ok(!visibleText.includes("b1</dcp-block-id>") && !visibleText.includes("b2</dcp-block-id>") && !visibleText.includes("b3</dcp-block-id>") && !visibleText.includes("b4</dcp-block-id>"), "FAIL — expected all child blocks to be hidden after batched roll-up");
+
+  console.log("  PASS: independent roll-up ranges can be validated and committed together");
+  console.log("TEST 46 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 47 — MIN-RANGE VALIDATION COUNTS VISIBLE BLOCKS
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 47: minRangeMessages counts active compressed blocks as visible items");
+
+  const messages: any[] = [
+    { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
+    { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
+    { role: "user", content: [{ type: "text", text: "c" }], timestamp: 3000 },
+    { role: "user", content: [{ type: "text", text: "d" }], timestamp: 4000 },
+  ];
+
+  const state = makeState([
+    {
+      id: 1,
+      topic: "first child",
+      summary: "First child summary.",
+      startTimestamp: 1000,
+      endTimestamp: 2000,
+      anchorTimestamp: 3000,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+    {
+      id: 2,
+      topic: "second child",
+      summary: "Second child summary.",
+      startTimestamp: 3000,
+      endTimestamp: 4000,
+      anchorTimestamp: 4001,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+  ]);
+  state.nextBlockId = 3;
+
+  const config = makeConfig();
+  config.compress.minRangeMessages = 2;
+  applyPruning(messages, state, config);
+
+  await assert.rejects(
+    () =>
+      executeCompressTool(state, config, {
+        topic: "too small block roll-up",
+        ranges: [
+          {
+            startId: "b1",
+            endId: "b1",
+            summary: "Only child.\n\n(b1)",
+          },
+        ],
+      }),
+    /covers only 1 visible conversation item\(s\)/,
+    "FAIL — expected a single visible block to count as only one item for minRangeMessages",
+  );
+
+  const result = await executeCompressTool(state, config, {
+    topic: "valid block roll-up",
+    ranges: [
+      {
+        startId: "b1",
+        endId: "b2",
+        summary: "Both children.\n\n(b1)\n\nThen\n\n(b2)",
+      },
+    ],
+  });
+
+  assert.deepStrictEqual(result.details.blockIds, [3], "FAIL — expected the two-block visible range to satisfy minRangeMessages");
+
+  console.log("  PASS: minRangeMessages measures visible block ranges correctly");
+  console.log("TEST 47 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 48 — PLACEHOLDERS MUST USE CANONICAL bN FORM
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 48: roll-up placeholders require the canonical bN spelling");
+
+  const messages: any[] = [
+    { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
+    { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
+  ];
+
+  const state = makeState([
+    {
+      id: 1,
+      topic: "only child",
+      summary: "Only child summary.",
+      startTimestamp: 1000,
+      endTimestamp: 2000,
+      anchorTimestamp: 2001,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+  ]);
+  state.nextBlockId = 2;
+
+  const config = makeConfig();
+  applyPruning(messages, state, config);
+
+  await assert.rejects(
+    () =>
+      executeCompressTool(state, config, {
+        topic: "bad placeholder spelling",
+        ranges: [
+          {
+            startId: "b1",
+            endId: "b1",
+            summary: "Non-canonical placeholder.\n\n(b01)",
+          },
+        ],
+      }),
+    /Missing: b1\./,
+    "FAIL — expected (b01) not to satisfy the required canonical (b1) placeholder",
+  );
+
+  console.log("  PASS: non-canonical placeholder spellings are rejected");
+  console.log("TEST 48 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 49 — CORRUPT ACTIVE BLOCKS DO NOT BLOCK NEW COMPRESSIONS
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 49: corrupt active blocks are ignored during new compression overlap checks");
+
+  const messages: any[] = [
+    { role: "user", content: [{ type: "text", text: "alpha" }], timestamp: 1000 },
+    { role: "user", content: [{ type: "text", text: "beta" }], timestamp: 2000 },
+    { role: "user", content: [{ type: "text", text: "tail" }], timestamp: 3000 },
+  ];
+
+  const state = makeState([
+    {
+      id: 1,
+      topic: "corrupt block",
+      summary: "Corrupt block summary.",
+      startTimestamp: Infinity,
+      endTimestamp: 2000,
+      anchorTimestamp: 3000,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+  ]);
+  state.nextBlockId = 2;
+
+  const config = makeConfig();
+  applyPruning(messages, state, config);
+
+  const result = await executeCompressTool(state, config, {
+    topic: "fresh raw compression",
+    ranges: [
+      {
+        startId: "m001",
+        endId: "m002",
+        summary: "Fresh raw work was summarized.",
+      },
+    ],
+  });
+
+  assert.deepStrictEqual(result.details.blockIds, [2], "FAIL — expected the new compression block to be created despite the corrupt active block");
+  assert.ok(state.compressionBlocks.find((b) => b.id === 2)?.active, "FAIL — expected the new compression block to be active");
+
+  console.log("  PASS: corrupt active blocks do not block valid new compressions");
+  console.log("TEST 49 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 50 — ANCHORS RESPECT PASSTHROUGH MESSAGES
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 50: compression anchors account for visible passthrough messages");
+
+  const messages: any[] = [
+    { role: "user", content: [{ type: "text", text: "compress me" }], timestamp: 1000 },
+    { role: "branch_summary", content: [{ type: "text", text: "passthrough" }], timestamp: 1500 },
+    { role: "user", content: [{ type: "text", text: "tail" }], timestamp: 2000 },
+  ];
+
+  const state = makeState();
+  const config = makeConfig();
+  applyPruning(messages, state, config);
+
+  await executeCompressTool(state, config, {
+    topic: "passthrough anchor",
+    ranges: [
+      {
+        startId: "m001",
+        endId: "m001",
+        summary: "Compressed first user message.",
+      },
+    ],
+  });
+
+  const block = state.compressionBlocks.find((b) => b.id === 1);
+  assert.strictEqual(block?.anchorTimestamp, 1500, "FAIL — expected the anchor to target the passthrough message immediately after the range");
+
+  const visible = applyPruning(messages, state, config);
+  const compressedIndex = visible.findIndex((m: any) => JSON.stringify(m).includes("b1</dcp-block-id>"));
+  const passthroughIndex = visible.findIndex((m: any) => m.role === "branch_summary");
+  const tailIndex = visible.findIndex((m: any) => m.timestamp === 2000);
+  assert.ok(compressedIndex !== -1, "FAIL — expected the compressed summary to remain visible");
+  assert.ok(passthroughIndex !== -1, "FAIL — expected the passthrough message to remain visible");
+  assert.ok(compressedIndex < passthroughIndex && passthroughIndex < tailIndex, "FAIL — expected the compressed summary to appear before the passthrough message and tail");
+
+  console.log("  PASS: compression anchors preserve chronology around passthrough messages");
+  console.log("TEST 50 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 51 — EMPTY RANGE LISTS ARE REJECTED
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 51: empty compress requests are rejected");
+
+  const state = makeState();
+  const config = makeConfig();
+
+  await assert.rejects(
+    () =>
+      executeCompressTool(state, config, {
+        topic: "empty compression",
+        ranges: [],
+      }),
+    /at least one range/,
+    "FAIL — expected empty compress requests to be rejected",
+  );
+
+  console.log("  PASS: empty compress requests fail fast");
+  console.log("TEST 51 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 52 — PLACEHOLDER-ONLY ROLL-UPS ARE REJECTED
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 52: placeholder-only roll-up summaries are rejected");
+
+  const messages: any[] = [
+    { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
+    { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
+    { role: "user", content: [{ type: "text", text: "c" }], timestamp: 3000 },
+    { role: "user", content: [{ type: "text", text: "d" }], timestamp: 4000 },
+  ];
+
+  const state = makeState([
+    {
+      id: 1,
+      topic: "first child",
+      summary: "First child summary.",
+      startTimestamp: 1000,
+      endTimestamp: 2000,
+      anchorTimestamp: 3000,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+    {
+      id: 2,
+      topic: "second child",
+      summary: "Second child summary.",
+      startTimestamp: 3000,
+      endTimestamp: 4000,
+      anchorTimestamp: 4001,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+  ]);
+  state.nextBlockId = 3;
+
+  const config = makeConfig();
+  applyPruning(messages, state, config);
+
+  await assert.rejects(
+    () =>
+      executeCompressTool(state, config, {
+        topic: "empty parent summary",
+        ranges: [
+          {
+            startId: "b1",
+            endId: "b2",
+            summary: "1. (b1)\n2. (b2)",
+          },
+        ],
+      }),
+    /must retain substantive summary text after block placeholders are removed/,
+    "FAIL — expected placeholder-only roll-up summaries to be rejected",
+  );
+
+  await assert.rejects(
+    () =>
+      executeCompressTool(state, config, {
+        topic: "markup-only parent summary",
+        ranges: [
+          {
+            startId: "b1",
+            endId: "b2",
+            summary: "<p>(b1)</p><p>(b2)</p>",
+          },
+        ],
+      }),
+    /must retain substantive summary text after block placeholders are removed/,
+    "FAIL — expected markup-only placeholder shells to be rejected",
+  );
+
+  assert.strictEqual(state.compressionBlocks.length, 2, "FAIL — rejected placeholder-only roll-up should not create a parent block");
+  assert.strictEqual(state.nextBlockId, 3, "FAIL — rejected placeholder-only roll-up should not advance nextBlockId");
+  for (const childId of [1, 2]) {
+    const child = state.compressionBlocks.find((b) => b.id === childId);
+    assert.strictEqual(child?.active, true, `FAIL — child b${childId} should remain active`);
+    assert.strictEqual(child?.supersededByBlockId, undefined, `FAIL — child b${childId} should not be superseded`);
+    assert.strictEqual(child?.supersededAt, undefined, `FAIL — child b${childId} should not record supersededAt`);
+  }
+
+  console.log("  PASS: placeholder-only roll-up summaries are rejected before child blocks are superseded");
+  console.log("TEST 52 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 53 — BATCHED SUBSTANTIVE-SUMMARY FAILURES ARE ATOMIC
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 53: batched roll-up rejection remains atomic when a parent summary becomes non-substantive");
+
+  const messages: any[] = [
+    { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
+    { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
+    { role: "user", content: [{ type: "text", text: "c" }], timestamp: 3000 },
+    { role: "user", content: [{ type: "text", text: "d" }], timestamp: 4000 },
+    { role: "user", content: [{ type: "text", text: "e" }], timestamp: 5000 },
+    { role: "user", content: [{ type: "text", text: "f" }], timestamp: 6000 },
+    { role: "user", content: [{ type: "text", text: "g" }], timestamp: 7000 },
+    { role: "user", content: [{ type: "text", text: "h" }], timestamp: 8000 },
+  ];
+
+  const state = makeState([
+    {
+      id: 1,
+      topic: "first pair a",
+      summary: "First pair a summary.",
+      startTimestamp: 1000,
+      endTimestamp: 2000,
+      anchorTimestamp: 3000,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+    {
+      id: 2,
+      topic: "first pair b",
+      summary: "First pair b summary.",
+      startTimestamp: 3000,
+      endTimestamp: 4000,
+      anchorTimestamp: 5000,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+    {
+      id: 3,
+      topic: "second pair a",
+      summary: "Second pair a summary.",
+      startTimestamp: 5000,
+      endTimestamp: 6000,
+      anchorTimestamp: 7000,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+    {
+      id: 4,
+      topic: "second pair b",
+      summary: "Second pair b summary.",
+      startTimestamp: 7000,
+      endTimestamp: 8000,
+      anchorTimestamp: 8001,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+  ]);
+  state.nextBlockId = 5;
+
+  const config = makeConfig();
+  applyPruning(messages, state, config);
+
+  await assert.rejects(
+    () =>
+      executeCompressTool(state, config, {
+        topic: "mixed substantive batch",
+        ranges: [
+          {
+            startId: "b1",
+            endId: "b2",
+            summary: "Valid parent text.\n\n(b1)\n\nThen\n\n(b2)",
+          },
+          {
+            startId: "b3",
+            endId: "b4",
+            summary: "1. (b3)\n2. (b4)",
+          },
+        ],
+      }),
+    /must retain substantive summary text after block placeholders are removed/,
+    "FAIL — expected batched substantive-summary validation to reject the whole request",
+  );
+
+  assert.strictEqual(state.compressionBlocks.length, 4, "FAIL — rejected batched roll-up should not create parent blocks");
+  assert.strictEqual(state.nextBlockId, 5, "FAIL — rejected batched roll-up should not advance nextBlockId");
+  for (const childId of [1, 2, 3, 4]) {
+    const child = state.compressionBlocks.find((b) => b.id === childId);
+    assert.strictEqual(child?.active, true, `FAIL — child b${childId} should remain active after batch rejection`);
+    assert.strictEqual(child?.supersededByBlockId, undefined, `FAIL — child b${childId} should not be superseded after batch rejection`);
+    assert.strictEqual(child?.supersededAt, undefined, `FAIL — child b${childId} should not record supersededAt after batch rejection`);
+  }
+
+  console.log("  PASS: substantive-summary validation failures remain atomic across batched roll-ups");
+  console.log("TEST 53 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 54 — ROLL-UP TOKEN SAVINGS REPLACE CHILD SAVINGS
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 54: roll-up token accounting reflects the active parent rather than child-plus-parent totals");
+
+  const messages: any[] = [
+    { role: "user", content: [{ type: "text", text: "alpha ".repeat(80) }], timestamp: 1000 },
+    { role: "user", content: [{ type: "text", text: "beta ".repeat(80) }], timestamp: 2000 },
+    { role: "user", content: [{ type: "text", text: "gamma ".repeat(80) }], timestamp: 3000 },
+    { role: "user", content: [{ type: "text", text: "delta ".repeat(80) }], timestamp: 4000 },
+    { role: "user", content: [{ type: "text", text: "tail" }], timestamp: 5000 },
+  ];
+
+  const state = makeState([
+    {
+      id: 1,
+      topic: "first child",
+      summary: "First child summary.",
+      startTimestamp: 1000,
+      endTimestamp: 2000,
+      anchorTimestamp: 3000,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+    {
+      id: 2,
+      topic: "second child",
+      summary: "Second child summary.",
+      startTimestamp: 3000,
+      endTimestamp: 4000,
+      anchorTimestamp: 5000,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+  ]);
+  state.nextBlockId = 3;
+
+  const config = makeConfig();
+  applyPruning(messages, state, config);
+  const childSavings = state.tokensSaved;
+
+  await executeCompressTool(state, config, {
+    topic: "roll-up parent",
+    ranges: [
+      {
+        startId: "b1",
+        endId: "b2",
+        summary: "Merged parent summary covering both child ranges.\n\n(b1)\n\nThen\n\n(b2)",
+      },
+    ],
+  });
+
+  assert.notStrictEqual(
+    state.tokensSaved,
+    childSavings,
+    "FAIL — compress execution should stop reporting superseded child savings immediately",
+  );
+  assert.strictEqual(
+    state.tokensSaved,
+    0,
+    "FAIL — before the parent is applied, token savings should not include inactive child blocks",
+  );
+
+  applyPruning(messages, state, config);
+  const rolledUpSavings = state.tokensSaved;
+
+  const statsNotifications = await executeDcpCommand(state, config, "stats");
+  assert.ok(
+    statsNotifications[0]?.message.includes(
+      `Compression tokens saved (estimated): ${rolledUpSavings.toLocaleString()}`,
+    ),
+    "FAIL — /dcp stats should report active parent-only token savings",
+  );
+  assert.ok(
+    statsNotifications[0]?.message.includes("Compression blocks active: 1 / 3 total"),
+    "FAIL — /dcp stats should report only the roll-up parent as active",
+  );
+
+  const contextNotifications = await executeDcpCommand(
+    state,
+    config,
+    "context",
+    [],
+    { tokens: 1234, contextWindow: 10000 },
+  );
+  assert.ok(
+    contextNotifications[0]?.message.includes(
+      `Compression tokens saved (estimated): ${rolledUpSavings.toLocaleString()}`,
+    ),
+    "FAIL — /dcp context should report active parent-only token savings",
+  );
+  assert.ok(
+    contextNotifications[0]?.message.includes("Compression blocks: 1"),
+    "FAIL — /dcp context should report only active compression blocks",
+  );
+  const parent = state.compressionBlocks.find((block) => block.id === 3);
+  assert.ok(parent?.active, "FAIL — expected the roll-up parent to be active");
+
+  const expectedState = makeState([
+    {
+      ...parent!,
+      active: true,
+      supersedesBlockIds: undefined,
+      supersededByBlockId: undefined,
+      supersededAt: undefined,
+    },
+  ]);
+  applyPruning(messages, expectedState, config);
+
+  assert.ok(childSavings > 0, "FAIL — expected child blocks to contribute token savings before roll-up");
+  assert.strictEqual(
+    rolledUpSavings,
+    expectedState.tokensSaved,
+    "FAIL — roll-up should report only the active parent block's savings",
+  );
+  assert.notStrictEqual(
+    rolledUpSavings,
+    childSavings + expectedState.tokensSaved,
+    "FAIL — roll-up savings should not double-count superseded child blocks",
+  );
+
+  applyPruning(messages, state, config);
+  assert.strictEqual(
+    state.tokensSaved,
+    rolledUpSavings,
+    "FAIL — repeated pruning after roll-up should not change token savings",
+  );
+
+  console.log("  PASS: roll-up token savings reflect only the active parent block");
+  console.log("TEST 54 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 55 — WRAPPED PLACEHOLDERS ARE REJECTED
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 55: roll-up placeholders must be submitted as bare tokens");
+
+  const messages: any[] = [
+    { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
+    { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
+  ];
+
+  const state = makeState([
+    {
+      id: 1,
+      topic: "only child",
+      summary: "Only child summary.",
+      startTimestamp: 1000,
+      endTimestamp: 2000,
+      anchorTimestamp: 2001,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+  ]);
+  state.nextBlockId = 2;
+
+  const config = makeConfig();
+  applyPruning(messages, state, config);
+
+  await assert.rejects(
+    () =>
+      executeCompressTool(state, config, {
+        topic: "wrapped placeholder",
+        ranges: [
+          {
+            startId: "b1",
+            endId: "b1",
+            summary: "Substantive parent summary.\n\n`(b1)`",
+          },
+        ],
+      }),
+    /bare \(bN\) placeholders|Do not wrap block placeholders/i,
+    "FAIL — expected wrapped block placeholders to be rejected directly",
+  );
+
+  await assert.rejects(
+    () =>
+      executeCompressTool(state, config, {
+        topic: "inline text placeholder",
+        ranges: [
+          {
+            startId: "b1",
+            endId: "b1",
+            summary: "Substantive parent summary.\n\n`see child (b1)`",
+          },
+        ],
+      }),
+    /bare \(bN\) placeholders|Do not wrap block placeholders/i,
+    "FAIL — expected placeholders inside inline code spans with surrounding text to be rejected",
+  );
+
+  await assert.rejects(
+    () =>
+      executeCompressTool(state, config, {
+        topic: "multiline backtick placeholder",
+        ranges: [
+          {
+            startId: "b1",
+            endId: "b1",
+            summary: "Substantive parent summary.\n\n`\n(b1)\n`",
+          },
+        ],
+      }),
+    /bare \(bN\) placeholders|Do not wrap block placeholders/i,
+    "FAIL — expected multiline backtick-wrapped placeholders to be rejected",
+  );
+
+  await assert.rejects(
+    () =>
+      executeCompressTool(state, config, {
+        topic: "fenced placeholder",
+        ranges: [
+          {
+            startId: "b1",
+            endId: "b1",
+            summary: "Substantive parent summary.\n\n```\n(b1)\n```",
+          },
+        ],
+      }),
+    /bare \(bN\) placeholders|Do not wrap block placeholders/i,
+    "FAIL — expected fenced block placeholders to be rejected directly",
+  );
+
+  await assert.rejects(
+    () =>
+      executeCompressTool(state, config, {
+        topic: "tilde fenced placeholder",
+        ranges: [
+          {
+            startId: "b1",
+            endId: "b1",
+            summary: "Substantive parent summary.\n\n~~~\n(b1)\n~~~",
+          },
+        ],
+      }),
+    /bare \(bN\) placeholders|Do not wrap block placeholders/i,
+    "FAIL — expected tilde-fenced placeholders to be rejected",
+  );
+
+  await assert.rejects(
+    () =>
+      executeCompressTool(state, config, {
+        topic: "indented placeholder",
+        ranges: [
+          {
+            startId: "b1",
+            endId: "b1",
+            summary: "Substantive parent summary.\n\n    (b1)",
+          },
+        ],
+      }),
+    /bare \(bN\) placeholders|Do not wrap block placeholders/i,
+    "FAIL — expected indented-code placeholders to be rejected",
+  );
+
+  assert.strictEqual(state.compressionBlocks.length, 1, "FAIL — wrapped placeholder rejection should not create a parent block");
+  assert.strictEqual(state.compressionBlocks[0]?.active, true, "FAIL — wrapped placeholder rejection should leave the child block active");
+
+  console.log("  PASS: wrapped roll-up placeholders are rejected");
+  console.log("TEST 55 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 56 — WRAPPED-PLACEHOLDER BATCH REJECTION IS ATOMIC
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 56: wrapped-placeholder rejection remains atomic across batched roll-ups");
+
+  const messages: any[] = [
+    { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
+    { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
+    { role: "user", content: [{ type: "text", text: "c" }], timestamp: 3000 },
+    { role: "user", content: [{ type: "text", text: "d" }], timestamp: 4000 },
+  ];
+
+  const state = makeState([
+    {
+      id: 1,
+      topic: "first child",
+      summary: "First child summary.",
+      startTimestamp: 1000,
+      endTimestamp: 2000,
+      anchorTimestamp: 3000,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+    {
+      id: 2,
+      topic: "second child",
+      summary: "Second child summary.",
+      startTimestamp: 3000,
+      endTimestamp: 4000,
+      anchorTimestamp: 4001,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+  ]);
+  state.nextBlockId = 3;
+
+  const config = makeConfig();
+  applyPruning(messages, state, config);
+
+  await assert.rejects(
+    () =>
+      executeCompressTool(state, config, {
+        topic: "wrapped placeholder batch",
+        ranges: [
+          {
+            startId: "b1",
+            endId: "b1",
+            summary: "Valid parent text.\n\n(b1)",
+          },
+          {
+            startId: "b2",
+            endId: "b2",
+            summary: "Second parent text.\n\n`(b2)`",
+          },
+        ],
+      }),
+    /bare \(bN\) placeholders|Do not wrap block placeholders/i,
+    "FAIL — expected wrapped-placeholder validation to reject the whole batch",
+  );
+
+  assert.strictEqual(state.compressionBlocks.length, 2, "FAIL — rejected wrapped-placeholder batch should not create parent blocks");
+  assert.strictEqual(state.nextBlockId, 3, "FAIL — rejected wrapped-placeholder batch should not advance nextBlockId");
+  for (const childId of [1, 2]) {
+    const child = state.compressionBlocks.find((b) => b.id === childId);
+    assert.strictEqual(child?.active, true, `FAIL — child b${childId} should remain active after batch rejection`);
+    assert.strictEqual(child?.supersededByBlockId, undefined, `FAIL — child b${childId} should not be superseded after batch rejection`);
+  }
+
+  console.log("  PASS: wrapped-placeholder validation remains atomic across batched roll-ups");
+  console.log("TEST 56 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 57 — RAW COMPRESSIONS DO NOT REQUIRE ROLL-UP PARENT PROSE
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 57: terse raw compression summaries remain valid when no child blocks are being rolled up");
+
+  const messages: any[] = [
+    { role: "user", content: [{ type: "text", text: "alpha" }], timestamp: 1000 },
+    { role: "user", content: [{ type: "text", text: "beta" }], timestamp: 2000 },
+  ];
+
+  const state = makeState();
+  const config = makeConfig();
+  applyPruning(messages, state, config);
+
+  const result = await executeCompressTool(state, config, {
+    topic: "raw terse summary",
+    ranges: [
+      {
+        startId: "m001",
+        endId: "m002",
+        summary: "OK",
+      },
+    ],
+  });
+
+  assert.deepStrictEqual(result.details.blockIds, [1], "FAIL — expected terse raw summaries without placeholders to remain valid");
+  assert.strictEqual(state.compressionBlocks[0]?.summary, "OK", "FAIL — expected the terse raw summary to be stored unchanged");
+
+  console.log("  PASS: terse raw compression summaries remain valid");
+  console.log("TEST 57 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 58 — MIN-RANGE COUNTS ALL PASSTHROUGH VISIBLE MESSAGES
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 58: minRangeMessages counts all passthrough roles as visible items");
+
+  for (const passthroughRole of ["branch_summary", "compaction", "custom_message"] as const) {
+    const messages: any[] = [
+      { role: "user", content: [{ type: "text", text: "alpha" }], timestamp: 1000 },
+      { role: passthroughRole, content: [{ type: "text", text: "bridge" }], timestamp: 1500 },
+      { role: "user", content: [{ type: "text", text: "beta" }], timestamp: 2000 },
+    ];
+
+    const state = makeState();
+    const config = makeConfig();
+    config.compress.minRangeMessages = 3;
+    applyPruning(messages, state, config);
+
+    const result = await executeCompressTool(state, config, {
+      topic: `passthrough min range ${passthroughRole}`,
+      ranges: [
+        {
+          startId: "m001",
+          endId: "m002",
+          summary: `Compressed visible range across ${passthroughRole}.`,
+        },
+      ],
+    });
+
+    assert.deepStrictEqual(
+      result.details.blockIds,
+      [1],
+      `FAIL — ${passthroughRole} should count as a visible passthrough item`,
+    );
+  }
+
+  console.log("  PASS: minRangeMessages counts all passthrough roles as visible items");
+  console.log("TEST 58 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 59 — PASSTHROUGH MIN-RANGE COUNTING STAYS BOUNDED
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 59: minRangeMessages ignores passthrough messages outside the selected visible range");
+
+  for (const passthroughRole of ["branch_summary", "compaction", "custom_message"] as const) {
+    const messages: any[] = [
+      { role: "user", content: [{ type: "text", text: "alpha" }], timestamp: 1000 },
+      { role: passthroughRole, content: [{ type: "text", text: "inside" }], timestamp: 1500 },
+      { role: "user", content: [{ type: "text", text: "beta" }], timestamp: 2000 },
+      { role: passthroughRole, content: [{ type: "text", text: "outside" }], timestamp: 2500 },
+      { role: "user", content: [{ type: "text", text: "gamma" }], timestamp: 3000 },
+    ];
+
+    const state = makeState();
+    const config = makeConfig();
+    config.compress.minRangeMessages = 4;
+    applyPruning(messages, state, config);
+
+    await assert.rejects(
+      () =>
+        executeCompressTool(state, config, {
+          topic: `bounded passthrough count ${passthroughRole}`,
+          ranges: [
+            {
+              startId: "m001",
+              endId: "m002",
+              summary: "This range should cover only three visible items.",
+            },
+          ],
+        }),
+      /covers only 3 visible conversation item\(s\).*requires at least 4/s,
+      `FAIL — expected ${passthroughRole} counting to stay bounded to the selected visible range`,
+    );
+  }
+
+  console.log("  PASS: passthrough min-range counting stays bounded to the selected range");
+  console.log("TEST 59 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 60 — ROLL-UP PROMPTS PRESERVE SEMANTIC GUIDANCE
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 60: roll-up prompt text preserves core semantics");
 
   assertIncludesAll(
     COMPRESS_RANGE_DESCRIPTION,
     [
-      "already-compressed child summary",
-      "not to the original raw messages",
-      "marks the child block inactive/superseded",
+      "coverage marker for a contained child block",
+      "removes the placeholders",
+      "substantive authored text",
+      "marks the child blocks inactive/superseded",
       "Future context injects only the new parent block",
       "include every required block placeholder exactly once",
     ],
@@ -3087,7 +4235,8 @@ function findOrphanedToolUse(result: any[]): string | null {
   assertIncludesAll(
     SYSTEM_PROMPT,
     [
-      "roll-up consolidates multiple active compressed blocks into one active parent block",
+      "one or more active compressed blocks",
+      "surrounding resolved raw messages",
     ],
     "system prompt",
   );
@@ -3095,10 +4244,11 @@ function findOrphanedToolUse(result: any[]): string | null {
   assertIncludesAll(
     MANUAL_MODE_SYSTEM_PROMPT,
     [
-      "already-compressed child summaries",
-      "not raw original messages",
-      "accepted roll-ups supersede child blocks",
-      "future context shows only the parent block",
+      "coverage markers for contained child blocks",
+      "remove those placeholders before storage",
+      "substantive authored text",
+      "supersede the child blocks",
+      "show only the parent block",
     ],
     "manual mode prompt",
   );
@@ -3111,13 +4261,13 @@ function findOrphanedToolUse(result: any[]): string | null {
   ] as const) {
     assert.ok(text.includes("roll-up"), `FAIL — ${label} should mention roll-up`);
     assert.ok(
-      /child summaries|child blocks|parent block|active parent/.test(text),
+      /child blocks|parent block|active parent|placeholders are removed before storage|newly synthesized parent summary/.test(text),
       `FAIL — ${label} should describe parent/child roll-up semantics`,
     );
   }
 
   console.log("  PASS: prompt and nudge text preserve roll-up semantics");
-  console.log("TEST 44 PASSED\n");
+  console.log("TEST 60 PASSED\n");
 }
 
 console.log("All tests passed.");

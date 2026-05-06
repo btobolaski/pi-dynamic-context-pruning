@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent"
 import type { AutocompleteItem } from "@mariozechner/pi-tui"
 import { getProtectedTools, resolveToolName } from "./protected-tools.js"
-import { markToolPruned } from "./state.js"
+import { markToolPruned, recomputeCompressionTokensSaved } from "./state.js"
 import type { DcpState } from "./state.js"
 import type { DcpConfig } from "./config.js"
 
@@ -321,6 +321,7 @@ function handleDecompress(
   }
 
   block.active = false
+  recomputeCompressionTokensSaved(state)
 
   if (directChildren.length === 0) {
     ctx.ui.notify(`Decompressed block b${id}: "${block.topic}"`, "info")
@@ -332,6 +333,8 @@ function handleDecompress(
     delete child.supersededByBlockId
     delete child.supersededAt
   }
+
+  recomputeCompressionTokensSaved(state)
 
   ctx.ui.notify(
     `Decompressed block b${id}: "${block.topic}"\nReactivated direct child block${directChildren.length === 1 ? "" : "s"}: ${formatBlockIdList(directChildren.map((child) => child.id))}`,

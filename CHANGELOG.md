@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Repeated visible message IDs** — `injectMessageIds` now strips previously injected trailing or standalone `dcp-id` tags before reinjecting fresh IDs, preventing repeated or stale `<dcp-id>mNNN</dcp-id>` lines when the `context` hook is re-run on already-pruned visible messages.
+
 ### Changed
 
 - **Global config path moved** — DCP now loads its global user config from `~/.pi/agent/dcp.jsonc` instead of `~/.config/pi/dcp.jsonc`. Existing global configs should be moved to the new path.

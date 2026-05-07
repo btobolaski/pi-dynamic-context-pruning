@@ -373,6 +373,25 @@ function applyToolOutputPruning(messages: any[], state: DcpState): void {
   }
 }
 
+const STANDALONE_MESSAGE_ID_TAG_RE = /^<dcp-id>m\d+<\/dcp-id>$/u;
+const TRAILING_MESSAGE_ID_TAGS_RE = /(?:\n\s*<dcp-id>m\d+<\/dcp-id>\s*)+$/u;
+
+function stripTrailingMessageIdTags(text: string): string {
+  return text.replace(TRAILING_MESSAGE_ID_TAGS_RE, "");
+}
+
+function stripMessageIdBlocks(content: any[]): any[] {
+  return content.filter(
+    (block: any) =>
+      !(
+        block &&
+        block.type === "text" &&
+        typeof block.text === "string" &&
+        STANDALONE_MESSAGE_ID_TAG_RE.test(block.text.trim())
+      ),
+  );
+}
+
 /**
  * Inject sequential message IDs into eligible messages.
  * Updates state.messageIdSnapshot.
@@ -395,36 +414,42 @@ function injectMessageIds(messages: any[], state: DcpState): void {
 
     if (role === "user") {
       if (typeof msg.content === "string") {
-        msg.content = msg.content + `\n\n<dcp-id>${id}</dcp-id>`;
+        const baseContent = stripTrailingMessageIdTags(msg.content);
+        msg.content = baseContent + `\n\n<dcp-id>${id}</dcp-id>`;
       } else if (Array.isArray(msg.content)) {
-        msg.content = [...msg.content, { type: "text", text: idTag }];
+        const content = stripMessageIdBlocks(msg.content);
+        msg.content = [...content, { type: "text", text: idTag }];
       }
     } else if (role === "toolResult" || role === "bashExecution") {
       if (Array.isArray(msg.content)) {
-        msg.content = [...msg.content, { type: "text", text: idTag }];
+        const content = stripMessageIdBlocks(msg.content);
+        msg.content = [...content, { type: "text", text: idTag }];
       } else if (typeof msg.content === "string") {
-        msg.content = msg.content + idTag;
+        const baseContent = stripTrailingMessageIdTags(msg.content);
+        msg.content = baseContent + idTag;
       }
     } else if (role === "assistant") {
       if (Array.isArray(msg.content)) {
+        const content = stripMessageIdBlocks(msg.content);
         // Insert the ID tag before any tool_use (toolCall) blocks.
         // Anthropic requires: thinking → text → tool_use.
         // Appending after tool_use blocks violates that constraint.
-        const firstToolCallIdx = msg.content.findIndex(
+        const firstToolCallIdx = content.findIndex(
           (b: any) => b.type === "toolCall",
         );
         const idBlock = { type: "text", text: idTag };
         if (firstToolCallIdx === -1) {
-          msg.content = [...msg.content, idBlock];
+          msg.content = [...content, idBlock];
         } else {
           msg.content = [
-            ...msg.content.slice(0, firstToolCallIdx),
+            ...content.slice(0, firstToolCallIdx),
             idBlock,
-            ...msg.content.slice(firstToolCallIdx),
+            ...content.slice(firstToolCallIdx),
           ];
         }
       } else if (typeof msg.content === "string") {
-        msg.content = msg.content + idTag;
+        const baseContent = stripTrailingMessageIdTags(msg.content);
+        msg.content = baseContent + idTag;
       }
     }
 

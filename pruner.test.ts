@@ -154,6 +154,18 @@ function assertIncludesAll(text: string, expected: string[], label: string): voi
   }
 }
 
+function collectDcpIdTags(content: unknown): string[] {
+  const text = typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content
+          .map((block: any) => (typeof block?.text === "string" ? block.text : ""))
+          .join("\n")
+      : "";
+
+  return text.match(/<dcp-id>m\d+<\/dcp-id>/gu) ?? [];
+}
+
 // Four-message sequence that exercises the bug:
 //   user(1000) → assistant+toolCall(2000) → toolResult(3000) → user(4000)
 function makeMessages(): any[] {
@@ -690,6 +702,130 @@ function findOrphanedToolUse(result: any[]): string | null {
   console.log("  PASS: original message content unchanged after applyPruning");
 
   console.log("TEST 7 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 7A — MESSAGE ID INJECTION IDEMPOTENCE
+//
+// Verifies that applying pruning to an already-pruned visible message array
+// does not accumulate repeated <dcp-id> tags on the same message.
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 7A: message ID injection is idempotent");
+
+  const messages = makeMessages();
+  const state = makeState();
+  const config = makeConfig();
+
+  const firstPass = applyPruning(messages, state, config);
+  const secondPass = applyPruning(firstPass, state, config);
+
+  assert.deepStrictEqual(
+    collectDcpIdTags(secondPass[0]?.content),
+    ["<dcp-id>m001</dcp-id>"],
+    "FAIL — expected exactly one DCP ID tag on the first user message after re-pruning",
+  );
+  assert.deepStrictEqual(
+    collectDcpIdTags(secondPass[1]?.content),
+    ["<dcp-id>m002</dcp-id>"],
+    "FAIL — expected exactly one DCP ID tag on the assistant message after re-pruning",
+  );
+  assert.deepStrictEqual(
+    collectDcpIdTags(secondPass[2]?.content),
+    ["<dcp-id>m003</dcp-id>"],
+    "FAIL — expected exactly one DCP ID tag on the toolResult after re-pruning",
+  );
+  assert.deepStrictEqual(
+    collectDcpIdTags(secondPass[3]?.content),
+    ["<dcp-id>m004</dcp-id>"],
+    "FAIL — expected exactly one DCP ID tag on the final user message after re-pruning",
+  );
+
+  console.log("  PASS: re-pruning already visible messages preserves a single ID tag per message");
+
+  console.log("TEST 7A PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 7B — STALE IDS ARE REMOVED WHEN MESSAGES ARE RENUMBERED
+//
+// Verifies that if a later pruning pass compresses earlier messages and shifts
+// visible ordinals, older injected IDs are removed before the new IDs are
+// assigned.
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 7B: stale IDs are removed when visible messages are renumbered");
+
+  const messages = makeMessages();
+  const state = makeState();
+  const config = makeConfig();
+
+  const firstPass = applyPruning(messages, state, config);
+  state.compressionBlocks.push({
+    id: 1,
+    topic: "tool exchange",
+    summary: "The tool interaction was compressed.",
+    startTimestamp: 2000,
+    endTimestamp: 3000,
+    anchorTimestamp: 4000,
+    active: true,
+    summaryTokenEstimate: 8,
+    createdAt: Date.now(),
+  });
+  state.nextBlockId = 2;
+
+  const secondPass = applyPruning(firstPass, state, config);
+  const tailUser = secondPass.find((message: any) => message.timestamp === 4000);
+  assert.ok(tailUser, "FAIL — expected the tail user message to remain visible");
+  assert.deepStrictEqual(
+    collectDcpIdTags(tailUser.content),
+    ["<dcp-id>m003</dcp-id>"],
+    "FAIL — expected the tail user message to keep only its current renumbered DCP ID",
+  );
+  assert.ok(
+    !JSON.stringify(secondPass).includes("<dcp-id>m004</dcp-id>"),
+    "FAIL — expected stale m004 tags to be removed after renumbering",
+  );
+
+  console.log("  PASS: renumbering removes stale IDs before fresh IDs are injected");
+
+  console.log("TEST 7B PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 7C — STRING CONTENT RENUMBERING SAFETY
+//
+// Verifies that string-backed message content also drops stale trailing IDs
+// before reinjection when the visible message list is renumbered.
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 7C: string content renumbering removes stale IDs");
+
+  const state = makeState();
+  const config = makeConfig();
+  const messages = [
+    { role: "user", content: "first", timestamp: 1000 },
+    { role: "assistant", content: "second", timestamp: 2000 },
+    { role: "user", content: "third", timestamp: 3000 },
+  ];
+
+  const firstPass = applyPruning(messages, state, config);
+  const secondPass = applyPruning([firstPass[1], firstPass[2]], state, config);
+
+  assert.deepStrictEqual(
+    collectDcpIdTags(secondPass[0]?.content),
+    ["<dcp-id>m001</dcp-id>"],
+    "FAIL — expected the renumbered assistant string message to retain only m001",
+  );
+  assert.deepStrictEqual(
+    collectDcpIdTags(secondPass[1]?.content),
+    ["<dcp-id>m002</dcp-id>"],
+    "FAIL — expected the renumbered user string message to retain only m002",
+  );
+
+  console.log("  PASS: string content drops stale IDs when the visible slice is renumbered");
+
+  console.log("TEST 7C PASSED\n");
 }
 
 // ---------------------------------------------------------------------------

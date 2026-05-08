@@ -124,8 +124,8 @@ You specify boundaries by ID using the injected IDs visible in the conversation:
 - \`mNNN\` IDs identify raw messages (3 digits, zero-padded, e.g. \`m001\`, \`m042\`)
 - \`bN\` IDs identify previously compressed blocks
 
-Each message has an ID inside XML metadata tags like \`<dcp-id>...</dcp-id>\`.
-The ID tag appears at the end of the message it belongs to — it identifies the message above it, not the one below it.
+Each eligible visible message has an ID inside XML metadata tags like \`<dcp-id>...</dcp-id>\`.
+The tag belongs to that same message. It is usually appended at the end, but assistant messages with \`toolCall\` blocks may place it immediately before the first \`toolCall\` to preserve valid content ordering. It never refers to the following message.
 Treat these tags as boundary metadata only, not as tool result content.
 
 Rules:

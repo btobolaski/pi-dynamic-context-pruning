@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- **Repeated visible message IDs** — `injectMessageIds` now strips previously injected trailing or standalone `dcp-id` tags before reinjecting fresh IDs, preventing repeated or stale `<dcp-id>mNNN</dcp-id>` lines when the `context` hook is re-run on already-pruned visible messages.
+- **Repeated visible message IDs** — `injectMessageIds` now strips previously injected trailing `dcp-id` tags from string content, standalone ID blocks, and embedded trailing tags inside array-backed text blocks before reinjecting fresh IDs, preventing repeated or stale `<dcp-id>mNNN</dcp-id>` lines when the `context` hook is re-run on already-pruned visible messages.
 
 ### Changed
 

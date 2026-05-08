@@ -829,6 +829,166 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Test 7D — EMBEDDED ARRAY TEXT TAGS ARE STRIPPED
+//
+// Verifies that repeated dcp-id lines embedded at the end of a text block
+// inside array-backed content are stripped before reinjection.
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 7D: embedded array text tags are stripped");
+
+  const state = makeState();
+  const config = makeConfig();
+  const messages = [
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "All 17 tests pass. Let me also run the whole-workspace build to ensure nothing else broke:\n<dcp-id>m070</dcp-id>\n<dcp-id>m070</dcp-id>\n<dcp-id>m070</dcp-id>",
+        },
+      ],
+      timestamp: 1000,
+    },
+  ];
+
+  const result = applyPruning(messages, state, config);
+
+  assert.deepStrictEqual(
+    collectDcpIdTags(result[0]?.content),
+    ["<dcp-id>m001</dcp-id>"],
+    "FAIL — expected embedded stale tags to be replaced by one fresh ID",
+  );
+  assert.strictEqual(
+    result[0]?.content?.[0]?.text.includes("<dcp-id>"),
+    false,
+    "FAIL — expected the main assistant text block to have embedded dcp-id tags stripped",
+  );
+
+  console.log("  PASS: embedded trailing tags inside array text blocks are removed");
+
+  console.log("TEST 7D PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 7E — EMBEDDED TAG STRIPPING PRESERVES TOOLCALL ORDERING
+//
+// Verifies that sanitizing a text block before a toolCall still results in a
+// single injected ID block placed before the toolCall.
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 7E: embedded tag stripping preserves toolCall ordering");
+
+  const state = makeState();
+  const config = makeConfig();
+  const messages = [
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Running the build now:\n<dcp-id>m070</dcp-id>\n<dcp-id>m070</dcp-id>",
+        },
+        { type: "toolCall", id: "toolu_build", name: "bash", arguments: {} },
+      ],
+      timestamp: 1000,
+    },
+    {
+      role: "toolResult",
+      toolCallId: "toolu_build",
+      toolName: "bash",
+      content: [{ type: "text", text: "build output" }],
+      isError: false,
+      timestamp: 2000,
+    },
+  ];
+
+  const result = applyPruning(messages, state, config);
+  const content = result[0]?.content ?? [];
+
+  assert.deepStrictEqual(
+    collectDcpIdTags(content),
+    ["<dcp-id>m001</dcp-id>"],
+    "FAIL — expected one fresh ID after stripping embedded tags before toolCall",
+  );
+  assert.strictEqual(
+    content[0]?.text.includes("<dcp-id>"),
+    false,
+    "FAIL — expected the leading assistant text block to have embedded tags stripped",
+  );
+  assert.strictEqual(content[1]?.type, "text", "FAIL — expected injected ID block before toolCall");
+  assert.strictEqual(
+    content[1]?.text,
+    "\n<dcp-id>m001</dcp-id>",
+    "FAIL — expected the fresh DCP ID block immediately before toolCall",
+  );
+  assert.strictEqual(content[2]?.type, "toolCall", "FAIL — expected toolCall ordering to remain valid");
+  assert.ok(
+    !content.slice(3).some(
+      (block: any) => typeof block?.text === "string" && block.text.includes("<dcp-id>"),
+    ),
+    "FAIL — expected no DCP ID text after the toolCall",
+  );
+
+  console.log("  PASS: embedded-tag cleanup preserves assistant toolCall ordering");
+
+  console.log("TEST 7E PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 7F — STALE ID BLOCKS AFTER TOOLCALL ARE REPAIRED
+//
+// Verifies that if a stale standalone dcp-id block appears after a toolCall,
+// pruning removes it and reinserts a fresh ID block before the toolCall.
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 7F: stale ID blocks after toolCall are repaired");
+
+  const state = makeState();
+  const config = makeConfig();
+  const messages = [
+    {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "toolu_build", name: "bash", arguments: {} },
+        { type: "text", text: "\n<dcp-id>m070</dcp-id>" },
+      ],
+      timestamp: 1000,
+    },
+    {
+      role: "toolResult",
+      toolCallId: "toolu_build",
+      toolName: "bash",
+      content: [{ type: "text", text: "build output" }],
+      isError: false,
+      timestamp: 2000,
+    },
+  ];
+
+  const result = applyPruning(messages, state, config);
+  const content = result[0]?.content ?? [];
+
+  assert.deepStrictEqual(
+    collectDcpIdTags(content),
+    ["<dcp-id>m001</dcp-id>"],
+    "FAIL — expected exactly one fresh assistant DCP ID",
+  );
+  assert.strictEqual(content[0]?.type, "text", "FAIL — expected ID block before toolCall");
+  assert.strictEqual(content[0]?.text, "\n<dcp-id>m001</dcp-id>");
+  assert.strictEqual(content[1]?.type, "toolCall", "FAIL — expected toolCall after ID block");
+  assert.ok(
+    !content.slice(2).some(
+      (block: any) => typeof block?.text === "string" && block.text.includes("<dcp-id>"),
+    ),
+    "FAIL — expected stale DCP IDs after toolCall to be removed",
+  );
+
+  console.log("  PASS: stale post-toolCall IDs are moved back to the valid position");
+
+  console.log("TEST 7F PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
 // Test 8 — ORPHANED TOOLRESULT REPAIR
 //
 // Two compression blocks where the second removes an assistant but forward

@@ -380,16 +380,41 @@ function stripTrailingMessageIdTags(text: string): string {
   return text.replace(TRAILING_MESSAGE_ID_TAGS_RE, "");
 }
 
+function sanitizeMessageIdTextBlock(block: any): any | null {
+  if (!(block && block.type === "text" && typeof block.text === "string")) {
+    return block;
+  }
+
+  if (STANDALONE_MESSAGE_ID_TAG_RE.test(block.text.trim())) {
+    return null;
+  }
+
+  const strippedText = stripTrailingMessageIdTags(block.text);
+  if (strippedText === block.text) {
+    return block;
+  }
+
+  if (strippedText.length === 0) {
+    return null;
+  }
+
+  return {
+    ...block,
+    text: strippedText,
+  };
+}
+
 function stripMessageIdBlocks(content: any[]): any[] {
-  return content.filter(
-    (block: any) =>
-      !(
-        block &&
-        block.type === "text" &&
-        typeof block.text === "string" &&
-        STANDALONE_MESSAGE_ID_TAG_RE.test(block.text.trim())
-      ),
-  );
+  const sanitized: any[] = [];
+
+  for (const block of content) {
+    const sanitizedBlock = sanitizeMessageIdTextBlock(block);
+    if (sanitizedBlock !== null) {
+      sanitized.push(sanitizedBlock);
+    }
+  }
+
+  return sanitized;
 }
 
 /**

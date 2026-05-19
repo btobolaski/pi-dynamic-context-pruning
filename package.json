@@ -30,8 +30,8 @@
     "jsonc-parser": "^3.3.1"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-tui": "*",
+    "@earendil-works/pi-ai": "^0.75.0",
+    "@earendil-works/pi-tui": "^0.75.0",
     "@sinclair/typebox": "*"
   }
 }

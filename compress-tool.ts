@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Dynamic Context Pruning (DCP) — compress tool registration
+// Dynamic Context Pruning (DCP) - compress tool registration
 // ---------------------------------------------------------------------------
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent"
@@ -22,46 +22,13 @@ type ValidatedRange = {
   startTimestamp: number
   endTimestamp: number
   anchorTimestamp: number
-  storedSummary: string
+  summary: string
   containedBlockIds: number[]
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Remove `(bN)` placeholders from a roll-up summary before storage.
- *
- * Placeholders are validation/coverage markers, not expansion macros. The
- * stored parent summary should be a newly synthesized summary that remains
- * coherent after those markers are stripped.
- */
-function stripBlockPlaceholders(summary: string): string {
-  return summary
-    .replace(/\(b[1-9]\d*\)/g, "")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim()
-}
-
-/**
- * Require some meaningful prose after placeholder removal so roll-ups cannot
- * supersede child blocks with an effectively empty markdown shell.
- */
-function hasSubstantiveSummaryText(summary: string): boolean {
-  const normalized = summary
-    .replace(/<[^>]*>/g, " ")
-    .replace(/[`*_>#~\-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-
-  if (normalized.length === 0) return false
-
-  const lettersOnly = normalized.replace(/[^\p{L}]+/gu, "")
-  const wordWithLetter = normalized.match(/[\p{L}][\p{L}\p{N}]*/gu) ?? []
-  return wordWithLetter.length >= 2 || lettersOnly.length >= 9
-}
 
 /**
  * Resolve a user-supplied ID string (e.g. "m001" or "b3") to an actual
@@ -96,7 +63,7 @@ function resolveIdToTimestamp(
 }
 
 /**
- * Determine the anchor timestamp for a compression block — the first visible
+ * Determine the anchor timestamp for a compression block - the first visible
  * item that appears strictly after the selected range.
  *
  * Returns `endVisibleTimestamp + 1` when the range extends to the end of the
@@ -171,7 +138,11 @@ function extractVisibleBlockId(message: any): number | null {
       ? message.content
       : ""
 
-  const match = parts.match(/<dcp-block-id>b(\d+)<\/dcp-block-id>/)
+  // The genuine block-id metadata is always appended at the very end of the
+  // synthetic compressed message (see pruner.ts). Anchor to end-of-string so
+  // verbatim summary text cannot spoof a different block id by embedding a
+  // <dcp-block-id> tag in the summary body.
+  const match = parts.match(/<dcp-block-id>b(\d+)<\/dcp-block-id>\s*$/)
   return match ? parseInt(match[1]!, 10) : null
 }
 
@@ -255,88 +226,106 @@ function classifyActiveBlockOverlap(
   return "partial"
 }
 
-function extractBlockPlaceholderIds(summary: string): number[] {
-  return [...summary.matchAll(/\(b([1-9]\d*)\)/g)].map((match) => parseInt(match[1]!, 10))
-}
-
-function hasWrappedBlockPlaceholders(summary: string): boolean {
-  const placeholderPattern = /\(b[1-9]\d*\)/
-
-  for (const match of summary.matchAll(/(`+)([\s\S]*?)\1/g)) {
-    if (placeholderPattern.test(match[2] ?? "")) return true
-  }
-
-  for (const match of summary.matchAll(/(~~~+)([\s\S]*?)\1/g)) {
-    if (placeholderPattern.test(match[2] ?? "")) return true
-  }
-
-  const lines = summary.split(/\r?\n/)
-  let indentedBlock = ""
-  const flushIndentedBlock = (): boolean => {
-    if (indentedBlock.length === 0) return false
-    const hasPlaceholder = placeholderPattern.test(indentedBlock)
-    indentedBlock = ""
-    return hasPlaceholder
-  }
-
-  for (const line of lines) {
-    if (/^(?: {4}|\t)/.test(line)) {
-      indentedBlock += line + "\n"
-      continue
-    }
-    if (flushIndentedBlock()) return true
-  }
-
-  return flushIndentedBlock()
-}
-
 function formatBlockIds(blockIds: number[]): string {
   return blockIds.map((id) => `b${id}`).join(", ")
 }
 
-function validateContainedBlockPlaceholders(
-  summary: string,
+/**
+ * Parse a single `supersedes` entry into a numeric block ID.
+ *
+ * Entries must be the canonical `bN` form (no leading zeros, no whitespace,
+ * positive integer). Anything else throws a descriptive error so the calling
+ * model can correct the input without guessing at the format.
+ */
+function parseSupersedesEntry(entry: string, startId: string, endId: string): number {
+  if (typeof entry !== "string") {
+    throw new Error(
+      `Roll-up compression range (${startId}..${endId}) has an invalid "supersedes" entry: expected a string like "b3", got ${typeof entry}.`,
+    )
+  }
+
+  const match = entry.match(/^b([1-9]\d*)$/)
+  if (!match) {
+    throw new Error(
+      `Roll-up compression range (${startId}..${endId}) has an invalid "supersedes" entry "${entry}". ` +
+      `Each entry must use the canonical bN form (e.g. "b3"), with no leading zeros or whitespace.`,
+    )
+  }
+
+  return parseInt(match[1]!, 10)
+}
+
+/**
+ * Validate the explicit `supersedes` field against the set of active blocks
+ * fully contained in the compression range.
+ *
+ * Supersedes is the model's explicit declaration that a range is a roll-up
+ * superseding the listed child blocks. We enforce strict set-equality so the
+ * model cannot accidentally orphan or duplicate child blocks.
+ *
+ * - Non-roll-up range + non-empty supersedes → reject (supersedes refers to
+ *   blocks outside the range, or to inactive/unknown blocks).
+ * - Roll-up range + missing/duplicated/unexpected entries → reject with a
+ *   detailed diff so the model can fix the call on the next attempt.
+ * - Roll-up range + omitted supersedes → reject; the model must opt in to
+ *   superseding contained children.
+ */
+function validateSupersedesField(
+  supersedes: unknown,
   containedBlockIds: number[],
   startId: string,
   endId: string,
 ): void {
-  if (hasWrappedBlockPlaceholders(summary)) {
+  if (supersedes !== undefined && !Array.isArray(supersedes)) {
     throw new Error(
-      `Roll-up compression range (${startId}..${endId}) must use bare (bN) placeholders. Do not wrap block placeholders in backticks or code formatting.`,
+      `Compression range (${startId}..${endId}) has an invalid "supersedes" field: expected an array of bN strings, got ${typeof supersedes}.`,
     )
   }
 
-  const placeholderIds = extractBlockPlaceholderIds(summary)
   const expectedIds = [...containedBlockIds].sort((a, b) => a - b)
   const expectedIdSet = new Set(expectedIds)
-  const placeholderCounts = new Map<number, number>()
 
-  for (const id of placeholderIds) {
-    placeholderCounts.set(id, (placeholderCounts.get(id) ?? 0) + 1)
+  const providedIds: number[] = []
+  if (supersedes !== undefined) {
+    for (const entry of supersedes) {
+      providedIds.push(parseSupersedesEntry(entry, startId, endId))
+    }
   }
 
-  const unexpectedIds = [...new Set(placeholderIds)]
+  const providedCounts = new Map<number, number>()
+  for (const id of providedIds) {
+    providedCounts.set(id, (providedCounts.get(id) ?? 0) + 1)
+  }
+
+  const unexpectedIds = [...new Set(providedIds)]
     .filter((id) => !expectedIdSet.has(id))
     .sort((a, b) => a - b)
 
   if (expectedIds.length === 0) {
-    if (unexpectedIds.length > 0) {
+    if (providedIds.length > 0) {
       throw new Error(
-        `Compression range (${startId}..${endId}) does not contain any active compression blocks, ` +
-        `so its summary must not include block placeholders. ` +
-        `Unexpected placeholder(s): ${formatBlockIds(unexpectedIds)}.`,
+        `Compression range (${startId}..${endId}) does not fully contain any active compression blocks, ` +
+        `so "supersedes" must be omitted or empty. ` +
+        `Unexpected entries: ${formatBlockIds(unexpectedIds.length > 0 ? unexpectedIds : [...new Set(providedIds)].sort((a, b) => a - b))}.`,
       )
     }
     return
   }
 
-  const missingIds = expectedIds.filter((id) => (placeholderCounts.get(id) ?? 0) === 0)
-  const duplicatedIds = expectedIds.filter((id) => (placeholderCounts.get(id) ?? 0) > 1)
+  if (supersedes === undefined) {
+    throw new Error(
+      `Roll-up compression range (${startId}..${endId}) fully contains active block(s) ${formatBlockIds(expectedIds)}. ` +
+      `Pass "supersedes": [${expectedIds.map((id) => `"b${id}"`).join(", ")}] to acknowledge that those child blocks will be superseded.`,
+    )
+  }
+
+  const missingIds = expectedIds.filter((id) => (providedCounts.get(id) ?? 0) === 0)
+  const duplicatedIds = expectedIds.filter((id) => (providedCounts.get(id) ?? 0) > 1)
 
   if (missingIds.length > 0 || duplicatedIds.length > 0 || unexpectedIds.length > 0) {
     const parts = [
       `Roll-up compression range (${startId}..${endId}) fully contains active block(s) ${formatBlockIds(expectedIds)}.`,
-      `Its summary must reference each contained block exactly once using (bN) placeholders.`,
+      `Its "supersedes" array must list each contained block exactly once.`,
     ]
 
     if (missingIds.length > 0) {
@@ -387,6 +376,14 @@ export function registerCompressTool(
             description:
               "Complete technical summary replacing all content in range",
           }),
+          supersedes: Type.Optional(
+            Type.Array(Type.String(), {
+              description:
+                "Roll-up only: bN ids of active compressed blocks fully contained in this range. " +
+                "List each contained block exactly once (e.g. [\"b1\", \"b2\"]). " +
+                "Omit (or pass []) when the range contains no active compressed blocks.",
+            }),
+          ),
         }),
         {
           description: "One or more ranges to compress",
@@ -409,7 +406,7 @@ export function registerCompressTool(
       }
 
       for (const range of params.ranges) {
-        const { startId, endId, summary } = range
+        const { startId, endId, summary, supersedes } = range
 
         const requestedStartTimestamp = resolveIdToTimestamp(startId, "startTimestamp", state)
         const requestedEndTimestamp = resolveIdToTimestamp(endId, "endTimestamp", state)
@@ -508,14 +505,7 @@ export function registerCompressTool(
         }
 
         const containedBlockIds = containedBlocks.map((block) => block.id)
-        validateContainedBlockPlaceholders(summary, containedBlockIds, startId, endId)
-
-        const storedSummary = stripBlockPlaceholders(summary)
-        if (containedBlockIds.length > 0 && !hasSubstantiveSummaryText(storedSummary)) {
-          throw new Error(
-            `Compression range (${startId}..${endId}) must retain substantive summary text after block placeholders are removed.`,
-          )
-        }
+        validateSupersedesField(supersedes, containedBlockIds, startId, endId)
 
         validatedRanges.push({
           startId,
@@ -526,7 +516,7 @@ export function registerCompressTool(
             expandedRange.endVisibleTimestamp,
             visibleRangeMessages,
           ),
-          storedSummary,
+          summary,
           containedBlockIds,
         })
       }
@@ -536,14 +526,14 @@ export function registerCompressTool(
         const block: CompressionBlock = {
           id: state.nextBlockId++,
           topic: params.topic,
-          summary: range.storedSummary,
+          summary: range.summary,
           startTimestamp: range.startTimestamp,
           endTimestamp: range.endTimestamp,
           anchorTimestamp: range.anchorTimestamp,
           active: true,
           supersedesBlockIds:
             range.containedBlockIds.length > 0 ? [...range.containedBlockIds] : undefined,
-          summaryTokenEstimate: estimateTokens(range.storedSummary),
+          summaryTokenEstimate: estimateTokens(range.summary),
           createdAt,
         }
 

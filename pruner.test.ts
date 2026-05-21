@@ -1,6 +1,6 @@
 /**
  * Minimal self-contained tests for the applyCompressionBlocks logic inside
- * applyPruning.  No test framework — just assert + console.log.
+ * applyPruning.  No test framework - just assert + console.log.
  *
  * Run with:  bun run pruner.test.ts
  */
@@ -73,7 +73,7 @@ function makeState(compressionBlocks: DcpState["compressionBlocks"] = []): DcpSt
 async function executeCompressTool(
   state: DcpState,
   config: DcpConfig,
-  params: { topic: string; ranges: Array<{ startId: string; endId: string; summary: string }> },
+  params: { topic: string; ranges: Array<{ startId: string; endId: string; summary: string; supersedes?: string[] }> },
   notifications: Array<{ message: string; level: string }> = [],
 ): Promise<any> {
   let tool: any = null;
@@ -88,7 +88,7 @@ async function executeCompressTool(
     config,
   );
 
-  assert.ok(tool, "FAIL — compress tool was not registered");
+  assert.ok(tool, "FAIL - compress tool was not registered");
 
   return await tool.execute(
     "toolu_test",
@@ -126,7 +126,7 @@ async function executeDcpCommand(
     config,
   );
 
-  assert.ok(command, "FAIL — dcp command was not registered");
+  assert.ok(command, "FAIL - dcp command was not registered");
 
   await command.handler(args, {
     waitForIdle: async () => {},
@@ -150,7 +150,7 @@ async function executeDcpCommand(
 
 function assertIncludesAll(text: string, expected: string[], label: string): void {
   for (const phrase of expected) {
-    assert.ok(text.includes(phrase), `FAIL — ${label} should include: ${phrase}`);
+    assert.ok(text.includes(phrase), `FAIL - ${label} should include: ${phrase}`);
   }
 }
 
@@ -230,7 +230,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 1 — BUG SCENARIO
+// Test 1 - BUG SCENARIO
 //
 // Compression block covers ONLY the toolResult (startTimestamp=3000,
 // endTimestamp=3000).  Without the backward-expansion fix, the assistant
@@ -276,7 +276,7 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.strictEqual(
     orphan,
     null,
-    `FAIL — orphaned tool_use detected: ${orphan}`
+    `FAIL - orphaned tool_use detected: ${orphan}`
   );
   console.log("  PASS: no orphaned tool_use in result");
 
@@ -290,7 +290,7 @@ function findOrphanedToolUse(result: any[]): string | null {
     const successor = result[idx + 1];
     assert.ok(
       successor && successor.role === "toolResult" && successor.toolCallId === "toolu_abc",
-      `FAIL — assistant(ts=2000) survived but successor is not the matching toolResult ` +
+      `FAIL - assistant(ts=2000) survived but successor is not the matching toolResult ` +
         `(got role="${successor?.role}" toolCallId="${successor?.toolCallId}")`
     );
     console.log("  PASS: assistant survived with its toolResult partner intact");
@@ -302,7 +302,7 @@ function findOrphanedToolUse(result: any[]): string | null {
     assert.strictEqual(
       toolResultInResult,
       undefined,
-      "FAIL — assistant removed but orphaned toolResult still present"
+      "FAIL - assistant removed but orphaned toolResult still present"
     );
     console.log("  PASS: both assistant and toolResult removed together");
   }
@@ -311,7 +311,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 2 — PASSING SCENARIO
+// Test 2 - PASSING SCENARIO
 //
 // Compression block covers BOTH the assistant and the toolResult
 // (startTimestamp=2000, endTimestamp=3000).  Both messages must be removed
@@ -355,7 +355,7 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.strictEqual(
     orphan,
     null,
-    `FAIL — orphaned tool_use detected: ${orphan}`
+    `FAIL - orphaned tool_use detected: ${orphan}`
   );
   console.log("  PASS: no orphaned tool_use in result");
 
@@ -366,7 +366,7 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.strictEqual(
     assistantInResult,
     undefined,
-    `FAIL — assistant(ts=2000) should have been removed but is still present`
+    `FAIL - assistant(ts=2000) should have been removed but is still present`
   );
   console.log("  PASS: assistant(ts=2000) removed");
 
@@ -377,7 +377,7 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.strictEqual(
     toolResultInResult,
     undefined,
-    `FAIL — toolResult(toolCallId="toolu_abc") should have been removed but is still present`
+    `FAIL - toolResult(toolCallId="toolu_abc") should have been removed but is still present`
   );
   console.log("  PASS: toolResult(toolu_abc) removed");
 
@@ -387,7 +387,7 @@ function findOrphanedToolUse(result: any[]): string | null {
   );
   assert.ok(
     synthetic,
-    "FAIL — expected a synthetic [Compressed section] user message in result"
+    "FAIL - expected a synthetic [Compressed section] user message in result"
   );
   console.log("  PASS: synthetic summary message present");
 
@@ -395,10 +395,10 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 3 — MULTI-TOOLRESULT BACKWARD GAP
+// Test 3 - MULTI-TOOLRESULT BACKWARD GAP
 //
 // assistant has TWO tool_calls (A + B) producing two consecutive toolResult
-// messages.  The compression range starts at toolResult_B — meaning there is
+// messages.  The compression range starts at toolResult_B - meaning there is
 // a toolResult message (A) sitting between lo and the assistant.
 //
 // Bug: backward expansion stopped at toolResult_A (not an assistant) and
@@ -456,17 +456,17 @@ function findOrphanedToolUse(result: any[]): string | null {
 
   // All three must be absent (removed atomically) or all three present as a valid group
   if (assistantPresent) {
-    assert.ok(toolResultAPresent, "FAIL — assistant present but toolResult_A missing");
-    assert.ok(toolResultBPresent, "FAIL — assistant present but toolResult_B missing");
+    assert.ok(toolResultAPresent, "FAIL - assistant present but toolResult_A missing");
+    assert.ok(toolResultBPresent, "FAIL - assistant present but toolResult_B missing");
     // Verify ordering: assistant → toolResult_A → toolResult_B
     const aIdx = result.findIndex((m: any) => m.role === "assistant" && m.timestamp === 2000);
     const rAIdx = result.findIndex((m: any) => m.role === "toolResult" && m.toolCallId === "toolu_A");
     const rBIdx = result.findIndex((m: any) => m.role === "toolResult" && m.toolCallId === "toolu_B");
-    assert.ok(aIdx < rAIdx && rAIdx < rBIdx, "FAIL — assistant + toolResult ordering wrong");
+    assert.ok(aIdx < rAIdx && rAIdx < rBIdx, "FAIL - assistant + toolResult ordering wrong");
     console.log("  PASS: assistant + both toolResults kept as a coherent group");
   } else {
-    assert.ok(!toolResultAPresent, "FAIL — assistant removed but orphaned toolResult_A still present");
-    assert.ok(!toolResultBPresent, "FAIL — assistant removed but orphaned toolResult_B still present");
+    assert.ok(!toolResultAPresent, "FAIL - assistant removed but orphaned toolResult_A still present");
+    assert.ok(!toolResultBPresent, "FAIL - assistant removed but orphaned toolResult_B still present");
     console.log("  PASS: assistant + both toolResults removed atomically");
   }
 
@@ -474,7 +474,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 4 — BASHEXECUTION FORWARD GAP
+// Test 4 - BASHEXECUTION FORWARD GAP
 //
 // An assistant calls a tool whose result is stored as role="bashExecution".
 // The compression range covers the assistant but NOT the bashExecution result.
@@ -526,10 +526,10 @@ function findOrphanedToolUse(result: any[]): string | null {
   const bashPresent        = result.some((m: any) => m.role === "bashExecution" && m.toolCallId === "toolu_bash1");
 
   if (assistantPresent) {
-    assert.ok(bashPresent, "FAIL — assistant present but bashExecution result missing");
+    assert.ok(bashPresent, "FAIL - assistant present but bashExecution result missing");
     console.log("  PASS: assistant + bashExecution kept as a coherent group");
   } else {
-    assert.ok(!bashPresent, "FAIL — assistant removed but orphaned bashExecution still present");
+    assert.ok(!bashPresent, "FAIL - assistant removed but orphaned bashExecution still present");
     console.log("  PASS: assistant + bashExecution removed atomically");
   }
 
@@ -537,7 +537,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 5 — PASSTHROUGH ROLE BETWEEN ASSISTANT AND TOOLRESULT (BACKWARD)
+// Test 5 - PASSTHROUGH ROLE BETWEEN ASSISTANT AND TOOLRESULT (BACKWARD)
 //
 // A `compaction` message sits between the assistant and the toolResult.
 // The compression range covers only the toolResult.  Backward expansion
@@ -585,20 +585,20 @@ function findOrphanedToolUse(result: any[]): string | null {
   }
 
   const orphan = findOrphanedToolUse(result);
-  assert.strictEqual(orphan, null, `FAIL — orphaned tool_use detected: ${orphan}`);
+  assert.strictEqual(orphan, null, `FAIL - orphaned tool_use detected: ${orphan}`);
   console.log("  PASS: no orphaned tool_use in result");
 
   const assistantPresent = result.some((m: any) => m.role === "assistant" && m.timestamp === 2000);
   const toolResultPresent = result.some((m: any) => m.role === "toolResult" && m.toolCallId === "toolu_X");
-  assert.ok(!assistantPresent, "FAIL — assistant should have been removed");
-  assert.ok(!toolResultPresent, "FAIL — toolResult should have been removed");
+  assert.ok(!assistantPresent, "FAIL - assistant should have been removed");
+  assert.ok(!toolResultPresent, "FAIL - toolResult should have been removed");
   console.log("  PASS: assistant + toolResult removed atomically despite compaction in between");
 
   console.log("TEST 5 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 6 — PASSTHROUGH ROLE BETWEEN TOOLRESULTS (FORWARD EXPANSION)
+// Test 6 - PASSTHROUGH ROLE BETWEEN TOOLRESULTS (FORWARD EXPANSION)
 //
 // An assistant has two tool calls.  A `branch_summary` message sits between
 // the two toolResults.  The compression range covers the assistant.
@@ -651,22 +651,22 @@ function findOrphanedToolUse(result: any[]): string | null {
   }
 
   const orphan = findOrphanedToolUse(result);
-  assert.strictEqual(orphan, null, `FAIL — orphaned tool_use detected: ${orphan}`);
+  assert.strictEqual(orphan, null, `FAIL - orphaned tool_use detected: ${orphan}`);
   console.log("  PASS: no orphaned tool_use in result");
 
   const assistantPresent = result.some((m: any) => m.role === "assistant" && m.timestamp === 2000);
   const toolResultAPresent = result.some((m: any) => m.role === "toolResult" && m.toolCallId === "toolu_A");
   const toolResultBPresent = result.some((m: any) => m.role === "toolResult" && m.toolCallId === "toolu_B");
-  assert.ok(!assistantPresent, "FAIL — assistant should have been removed");
-  assert.ok(!toolResultAPresent, "FAIL — toolResult_A should have been removed");
-  assert.ok(!toolResultBPresent, "FAIL — toolResult_B should have been removed");
+  assert.ok(!assistantPresent, "FAIL - assistant should have been removed");
+  assert.ok(!toolResultAPresent, "FAIL - toolResult_A should have been removed");
+  assert.ok(!toolResultBPresent, "FAIL - toolResult_B should have been removed");
   console.log("  PASS: assistant + both toolResults removed despite branch_summary in between");
 
   console.log("TEST 6 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 7 — CONTENT MUTATION ISOLATION
+// Test 7 - CONTENT MUTATION ISOLATION
 //
 // Verifies that applyPruning does not mutate the original message objects.
 // After calling applyPruning, the original messages' content arrays should
@@ -684,28 +684,28 @@ function findOrphanedToolUse(result: any[]): string | null {
   const state = makeState(); // no compression blocks
   const config = makeConfig();
 
-  // Run applyPruning — this should NOT mutate the originals
+  // Run applyPruning - this should NOT mutate the originals
   applyPruning(messages, state, config);
 
   let mutated = false;
   for (let i = 0; i < messages.length; i++) {
     const current = JSON.stringify(messages[i].content);
     if (current !== originalContents[i]) {
-      console.log(`  FAIL — message[${i}] content was mutated`);
+      console.log(`  FAIL - message[${i}] content was mutated`);
       console.log(`    before: ${originalContents[i]}`);
       console.log(`    after:  ${current}`);
       mutated = true;
     }
   }
 
-  assert.ok(!mutated, "FAIL — original message content was mutated by applyPruning");
+  assert.ok(!mutated, "FAIL - original message content was mutated by applyPruning");
   console.log("  PASS: original message content unchanged after applyPruning");
 
   console.log("TEST 7 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 7A — MESSAGE ID INJECTION IDEMPOTENCE
+// Test 7A - MESSAGE ID INJECTION IDEMPOTENCE
 //
 // Verifies that applying pruning to an already-pruned visible message array
 // does not accumulate repeated <dcp-id> tags on the same message.
@@ -723,22 +723,22 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.deepStrictEqual(
     collectDcpIdTags(secondPass[0]?.content),
     ["<dcp-id>m001</dcp-id>"],
-    "FAIL — expected exactly one DCP ID tag on the first user message after re-pruning",
+    "FAIL - expected exactly one DCP ID tag on the first user message after re-pruning",
   );
   assert.deepStrictEqual(
     collectDcpIdTags(secondPass[1]?.content),
     ["<dcp-id>m002</dcp-id>"],
-    "FAIL — expected exactly one DCP ID tag on the assistant message after re-pruning",
+    "FAIL - expected exactly one DCP ID tag on the assistant message after re-pruning",
   );
   assert.deepStrictEqual(
     collectDcpIdTags(secondPass[2]?.content),
     ["<dcp-id>m003</dcp-id>"],
-    "FAIL — expected exactly one DCP ID tag on the toolResult after re-pruning",
+    "FAIL - expected exactly one DCP ID tag on the toolResult after re-pruning",
   );
   assert.deepStrictEqual(
     collectDcpIdTags(secondPass[3]?.content),
     ["<dcp-id>m004</dcp-id>"],
-    "FAIL — expected exactly one DCP ID tag on the final user message after re-pruning",
+    "FAIL - expected exactly one DCP ID tag on the final user message after re-pruning",
   );
 
   console.log("  PASS: re-pruning already visible messages preserves a single ID tag per message");
@@ -747,7 +747,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 7B — STALE IDS ARE REMOVED WHEN MESSAGES ARE RENUMBERED
+// Test 7B - STALE IDS ARE REMOVED WHEN MESSAGES ARE RENUMBERED
 //
 // Verifies that if a later pruning pass compresses earlier messages and shifts
 // visible ordinals, older injected IDs are removed before the new IDs are
@@ -776,15 +776,15 @@ function findOrphanedToolUse(result: any[]): string | null {
 
   const secondPass = applyPruning(firstPass, state, config);
   const tailUser = secondPass.find((message: any) => message.timestamp === 4000);
-  assert.ok(tailUser, "FAIL — expected the tail user message to remain visible");
+  assert.ok(tailUser, "FAIL - expected the tail user message to remain visible");
   assert.deepStrictEqual(
     collectDcpIdTags(tailUser.content),
     ["<dcp-id>m003</dcp-id>"],
-    "FAIL — expected the tail user message to keep only its current renumbered DCP ID",
+    "FAIL - expected the tail user message to keep only its current renumbered DCP ID",
   );
   assert.ok(
     !JSON.stringify(secondPass).includes("<dcp-id>m004</dcp-id>"),
-    "FAIL — expected stale m004 tags to be removed after renumbering",
+    "FAIL - expected stale m004 tags to be removed after renumbering",
   );
 
   console.log("  PASS: renumbering removes stale IDs before fresh IDs are injected");
@@ -793,7 +793,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 7C — STRING CONTENT RENUMBERING SAFETY
+// Test 7C - STRING CONTENT RENUMBERING SAFETY
 //
 // Verifies that string-backed message content also drops stale trailing IDs
 // before reinjection when the visible message list is renumbered.
@@ -815,12 +815,12 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.deepStrictEqual(
     collectDcpIdTags(secondPass[0]?.content),
     ["<dcp-id>m001</dcp-id>"],
-    "FAIL — expected the renumbered assistant string message to retain only m001",
+    "FAIL - expected the renumbered assistant string message to retain only m001",
   );
   assert.deepStrictEqual(
     collectDcpIdTags(secondPass[1]?.content),
     ["<dcp-id>m002</dcp-id>"],
-    "FAIL — expected the renumbered user string message to retain only m002",
+    "FAIL - expected the renumbered user string message to retain only m002",
   );
 
   console.log("  PASS: string content drops stale IDs when the visible slice is renumbered");
@@ -829,7 +829,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 7D — EMBEDDED ARRAY TEXT TAGS ARE STRIPPED
+// Test 7D - EMBEDDED ARRAY TEXT TAGS ARE STRIPPED
 //
 // Verifies that repeated dcp-id lines embedded at the end of a text block
 // inside array-backed content are stripped before reinjection.
@@ -857,12 +857,12 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.deepStrictEqual(
     collectDcpIdTags(result[0]?.content),
     ["<dcp-id>m001</dcp-id>"],
-    "FAIL — expected embedded stale tags to be replaced by one fresh ID",
+    "FAIL - expected embedded stale tags to be replaced by one fresh ID",
   );
   assert.strictEqual(
     result[0]?.content?.[0]?.text.includes("<dcp-id>"),
     false,
-    "FAIL — expected the main assistant text block to have embedded dcp-id tags stripped",
+    "FAIL - expected the main assistant text block to have embedded dcp-id tags stripped",
   );
 
   console.log("  PASS: embedded trailing tags inside array text blocks are removed");
@@ -871,7 +871,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 7E — EMBEDDED TAG STRIPPING PRESERVES TOOLCALL ORDERING
+// Test 7E - EMBEDDED TAG STRIPPING PRESERVES TOOLCALL ORDERING
 //
 // Verifies that sanitizing a text block before a toolCall still results in a
 // single injected ID block placed before the toolCall.
@@ -909,25 +909,25 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.deepStrictEqual(
     collectDcpIdTags(content),
     ["<dcp-id>m001</dcp-id>"],
-    "FAIL — expected one fresh ID after stripping embedded tags before toolCall",
+    "FAIL - expected one fresh ID after stripping embedded tags before toolCall",
   );
   assert.strictEqual(
     content[0]?.text.includes("<dcp-id>"),
     false,
-    "FAIL — expected the leading assistant text block to have embedded tags stripped",
+    "FAIL - expected the leading assistant text block to have embedded tags stripped",
   );
-  assert.strictEqual(content[1]?.type, "text", "FAIL — expected injected ID block before toolCall");
+  assert.strictEqual(content[1]?.type, "text", "FAIL - expected injected ID block before toolCall");
   assert.strictEqual(
     content[1]?.text,
     "\n<dcp-id>m001</dcp-id>",
-    "FAIL — expected the fresh DCP ID block immediately before toolCall",
+    "FAIL - expected the fresh DCP ID block immediately before toolCall",
   );
-  assert.strictEqual(content[2]?.type, "toolCall", "FAIL — expected toolCall ordering to remain valid");
+  assert.strictEqual(content[2]?.type, "toolCall", "FAIL - expected toolCall ordering to remain valid");
   assert.ok(
     !content.slice(3).some(
       (block: any) => typeof block?.text === "string" && block.text.includes("<dcp-id>"),
     ),
-    "FAIL — expected no DCP ID text after the toolCall",
+    "FAIL - expected no DCP ID text after the toolCall",
   );
 
   console.log("  PASS: embedded-tag cleanup preserves assistant toolCall ordering");
@@ -936,7 +936,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 7F — STALE ID BLOCKS AFTER TOOLCALL ARE REPAIRED
+// Test 7F - STALE ID BLOCKS AFTER TOOLCALL ARE REPAIRED
 //
 // Verifies that if a stale standalone dcp-id block appears after a toolCall,
 // pruning removes it and reinserts a fresh ID block before the toolCall.
@@ -971,16 +971,16 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.deepStrictEqual(
     collectDcpIdTags(content),
     ["<dcp-id>m001</dcp-id>"],
-    "FAIL — expected exactly one fresh assistant DCP ID",
+    "FAIL - expected exactly one fresh assistant DCP ID",
   );
-  assert.strictEqual(content[0]?.type, "text", "FAIL — expected ID block before toolCall");
+  assert.strictEqual(content[0]?.type, "text", "FAIL - expected ID block before toolCall");
   assert.strictEqual(content[0]?.text, "\n<dcp-id>m001</dcp-id>");
-  assert.strictEqual(content[1]?.type, "toolCall", "FAIL — expected toolCall after ID block");
+  assert.strictEqual(content[1]?.type, "toolCall", "FAIL - expected toolCall after ID block");
   assert.ok(
     !content.slice(2).some(
       (block: any) => typeof block?.text === "string" && block.text.includes("<dcp-id>"),
     ),
-    "FAIL — expected stale DCP IDs after toolCall to be removed",
+    "FAIL - expected stale DCP IDs after toolCall to be removed",
   );
 
   console.log("  PASS: stale post-toolCall IDs are moved back to the valid position");
@@ -989,7 +989,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 8 — ORPHANED TOOLRESULT REPAIR
+// Test 8 - ORPHANED TOOLRESULT REPAIR
 //
 // Two compression blocks where the second removes an assistant but forward
 // expansion cannot reach its toolResult due to processing order.  The repair
@@ -999,8 +999,8 @@ function findOrphanedToolUse(result: any[]): string | null {
 //   user(1000) → assistant_1(2000, toolCall_X) → toolResult_X(3000) →
 //   user(4000) → assistant_2(5000, toolCall_Y) → toolResult_Y(6000) → user(7000)
 //
-// Block 1: [1000..3000] — removes user, assistant_1, toolResult_X
-// Block 2: [4000..5000] — removes user, assistant_2 (toolResult_Y is outside)
+// Block 1: [1000..3000] - removes user, assistant_1, toolResult_X
+// Block 2: [4000..5000] - removes user, assistant_2 (toolResult_Y is outside)
 //   Forward expansion from assistant_2 should catch toolResult_Y, but if it
 //   doesn't (edge case), repair must clean it up.
 // ---------------------------------------------------------------------------
@@ -1054,7 +1054,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 
   // No orphaned tool_use or tool_result should remain
   const orphan = findOrphanedToolUse(result);
-  assert.strictEqual(orphan, null, `FAIL — orphaned tool_use detected: ${orphan}`);
+  assert.strictEqual(orphan, null, `FAIL - orphaned tool_use detected: ${orphan}`);
 
   const orphanedResults = result.filter(
     (m: any) => (m.role === "toolResult" || m.role === "bashExecution") &&
@@ -1064,14 +1064,14 @@ function findOrphanedToolUse(result: any[]): string | null {
       a.content.some((b: any) => b.type === "toolCall" && b.id === m.toolCallId)
     )
   );
-  assert.strictEqual(orphanedResults.length, 0, `FAIL — ${orphanedResults.length} orphaned toolResult(s) found`);
+  assert.strictEqual(orphanedResults.length, 0, `FAIL - ${orphanedResults.length} orphaned toolResult(s) found`);
   console.log("  PASS: no orphaned tool_use or toolResult in result");
 
   console.log("TEST 8 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 9 — DIRECT ORPHAN REPAIR (pre-broken state)
+// Test 9 - DIRECT ORPHAN REPAIR (pre-broken state)
 //
 // Directly construct a message array with an orphaned toolResult (no matching
 // assistant toolCall exists).  The repair function should remove it.
@@ -1085,7 +1085,7 @@ function findOrphanedToolUse(result: any[]): string | null {
     { role: "user",       content: [{ type: "text", text: "bye" }], timestamp: 3000 },
   ];
 
-  const state = makeState(); // no compression blocks — repair runs as safety net
+  const state = makeState(); // no compression blocks - repair runs as safety net
   const config = makeConfig();
 
   const result = applyPruning(messages, state, config);
@@ -1099,14 +1099,14 @@ function findOrphanedToolUse(result: any[]): string | null {
   }
 
   const orphanPresent = result.some((m: any) => m.role === "toolResult" && m.toolCallId === "orphan_id");
-  assert.ok(!orphanPresent, "FAIL — orphaned toolResult should have been removed by repair");
+  assert.ok(!orphanPresent, "FAIL - orphaned toolResult should have been removed by repair");
   console.log("  PASS: orphaned toolResult removed by repair function");
 
   console.log("TEST 9 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 10 — CORRUPTED BLOCK WITH NULL/INFINITY TIMESTAMPS (resilience)
+// Test 10 - CORRUPTED BLOCK WITH NULL/INFINITY TIMESTAMPS (resilience)
 //
 // Blocks from older sessions may have null/Infinity timestamps due to JSON
 // round-trip corruption. These blocks should be skipped during compression
@@ -1147,14 +1147,14 @@ function findOrphanedToolUse(result: any[]): string | null {
   }
 
   // All 3 original messages should survive (ghost block was skipped)
-  assert.strictEqual(result.length, 3, `FAIL — expected 3 messages, got ${result.length}`);
+  assert.strictEqual(result.length, 3, `FAIL - expected 3 messages, got ${result.length}`);
   console.log("  PASS: corrupted block skipped, all original messages preserved");
 
   console.log("TEST 10 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 11 — MIN RANGE DISABLED BY DEFAULT
+// Test 11 - MIN RANGE DISABLED BY DEFAULT
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 11: minRangeMessages=0 leaves small ranges allowed");
@@ -1174,15 +1174,15 @@ function findOrphanedToolUse(result: any[]): string | null {
     ],
   });
 
-  assert.deepStrictEqual(result.details.blockIds, [1], "FAIL — expected block id b1");
-  assert.strictEqual(state.compressionBlocks.length, 1, "FAIL — expected one compression block");
+  assert.deepStrictEqual(result.details.blockIds, [1], "FAIL - expected block id b1");
+  assert.strictEqual(state.compressionBlocks.length, 1, "FAIL - expected one compression block");
   console.log("  PASS: single-message range accepted when validation is disabled");
 
   console.log("TEST 11 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 12 — MIN RANGE REJECTION
+// Test 12 - MIN RANGE REJECTION
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 12: compress rejects ranges smaller than minRangeMessages");
@@ -1209,12 +1209,12 @@ function findOrphanedToolUse(result: any[]): string | null {
         ],
       }),
     /covers only 2 visible conversation item\(s\).*requires at least 3 consecutive visible item\(s\).*Choose a larger consecutive range and try again\./s,
-    "FAIL — expected a minimum-range validation error",
+    "FAIL - expected a minimum-range validation error",
   );
   assert.strictEqual(
     state.compressionBlocks.length,
     0,
-    "FAIL — rejected compression should not create a block",
+    "FAIL - rejected compression should not create a block",
   );
   console.log("  PASS: too-small range rejected with clear guidance");
 
@@ -1222,7 +1222,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 13 — MIN RANGE ACCEPTANCE AT THRESHOLD
+// Test 13 - MIN RANGE ACCEPTANCE AT THRESHOLD
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 13: compress accepts ranges that meet minRangeMessages exactly");
@@ -1247,17 +1247,17 @@ function findOrphanedToolUse(result: any[]): string | null {
     ],
   });
 
-  assert.deepStrictEqual(result.details.blockIds, [1], "FAIL — expected block id b1");
-  assert.strictEqual(state.compressionBlocks.length, 1, "FAIL — expected one compression block");
+  assert.deepStrictEqual(result.details.blockIds, [1], "FAIL - expected block id b1");
+  assert.strictEqual(state.compressionBlocks.length, 1, "FAIL - expected one compression block");
   assert.strictEqual(
     state.compressionBlocks[0]?.startTimestamp,
     2000,
-    "FAIL — expected the block to start at m002",
+    "FAIL - expected the block to start at m002",
   );
   assert.strictEqual(
     state.compressionBlocks[0]?.endTimestamp,
     4000,
-    "FAIL — expected the block to end at m004",
+    "FAIL - expected the block to end at m004",
   );
   console.log("  PASS: threshold-sized range accepted");
 
@@ -1265,7 +1265,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 14 — BATCHED VALIDATION IS ATOMIC
+// Test 14 - BATCHED VALIDATION IS ATOMIC
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 14: batched compress rejection does not partially create blocks");
@@ -1298,17 +1298,17 @@ function findOrphanedToolUse(result: any[]): string | null {
         ],
       }),
     /requires at least 3 consecutive visible item\(s\)/,
-    "FAIL — expected the mixed batch to be rejected",
+    "FAIL - expected the mixed batch to be rejected",
   );
-  assert.strictEqual(state.compressionBlocks.length, 0, "FAIL — rejected batch should create no blocks");
-  assert.strictEqual(state.nextBlockId, 1, "FAIL — rejected batch should not advance nextBlockId");
+  assert.strictEqual(state.compressionBlocks.length, 0, "FAIL - rejected batch should create no blocks");
+  assert.strictEqual(state.nextBlockId, 1, "FAIL - rejected batch should not advance nextBlockId");
   console.log("  PASS: rejected batch leaves compression state unchanged");
 
   console.log("TEST 14 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 15 — CONFIG LOADING DEFAULTS AND LAYER PRECEDENCE
+// Test 15 - CONFIG LOADING DEFAULTS AND LAYER PRECEDENCE
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 15: loadConfig auto-creates ~/.pi/agent/dcp.jsonc and honors layer precedence");
@@ -1334,11 +1334,11 @@ function findOrphanedToolUse(result: any[]): string | null {
     assert.strictEqual(
       defaultConfig.compress.minRangeMessages,
       0,
-      "FAIL — minRangeMessages should default to 0",
+      "FAIL - minRangeMessages should default to 0",
     );
     assert.ok(
       fs.existsSync(globalConfigPath),
-      "FAIL — global config should be auto-created at ~/.pi/agent/dcp.jsonc",
+      "FAIL - global config should be auto-created at ~/.pi/agent/dcp.jsonc",
     );
 
     fs.writeFileSync(
@@ -1356,7 +1356,7 @@ function findOrphanedToolUse(result: any[]): string | null {
     assert.strictEqual(
       globalConfig.compress.minRangeMessages,
       1,
-      "FAIL — global config should override the default value",
+      "FAIL - global config should override the default value",
     );
 
     process.env["PI_CONFIG_DIR"] = envDir;
@@ -1375,7 +1375,7 @@ function findOrphanedToolUse(result: any[]): string | null {
     assert.strictEqual(
       envConfig.compress.minRangeMessages,
       2,
-      "FAIL — PI_CONFIG_DIR config should override the global config",
+      "FAIL - PI_CONFIG_DIR config should override the global config",
     );
 
     fs.mkdirSync(path.join(projectDir, ".pi"), { recursive: true });
@@ -1394,12 +1394,12 @@ function findOrphanedToolUse(result: any[]): string | null {
     assert.strictEqual(
       projectConfig.compress.minRangeMessages,
       3,
-      "FAIL — project config should override env/global config when discovered from nested directories",
+      "FAIL - project config should override env/global config when discovered from nested directories",
     );
     assert.strictEqual(
       projectConfig.strategies.purgeErrors.turns,
       4,
-      "FAIL — unrelated default values should remain intact after layered merges",
+      "FAIL - unrelated default values should remain intact after layered merges",
     );
     console.log("  PASS: config loading preserves defaults, merges all layers, and walks up for project config");
   } finally {
@@ -1416,7 +1416,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 16 — CONFIG PARSE ERRORS, ARRAY MERGING, AND LEGACY PATH REGRESSION
+// Test 16 - CONFIG PARSE ERRORS, ARRAY MERGING, AND LEGACY PATH REGRESSION
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 16: loadConfig ignores malformed files, union-merges arrays, and ignores the legacy global path");
@@ -1486,12 +1486,12 @@ function findOrphanedToolUse(result: any[]): string | null {
     assert.strictEqual(
       mergedConfig.compress.minRangeMessages,
       1,
-      "FAIL — legacy ~/.config/pi/dcp.jsonc should be ignored in favor of ~/.pi/agent/dcp.jsonc",
+      "FAIL - legacy ~/.config/pi/dcp.jsonc should be ignored in favor of ~/.pi/agent/dcp.jsonc",
     );
     assert.deepStrictEqual(
       mergedConfig.compress.protectedTools,
       ["compress", "write", "edit", "read"],
-      "FAIL — protectedTools should be union-merged and deduplicated across config layers",
+      "FAIL - protectedTools should be union-merged and deduplicated across config layers",
     );
 
     fs.writeFileSync(
@@ -1507,7 +1507,7 @@ function findOrphanedToolUse(result: any[]): string | null {
     assert.deepStrictEqual(
       malformedEnvConfig.compress.protectedTools,
       ["compress", "write", "edit"],
-      "FAIL — malformed env config should be ignored instead of partially applied",
+      "FAIL - malformed env config should be ignored instead of partially applied",
     );
     console.log("  PASS: malformed configs are ignored, arrays union-merge, and the legacy path is unused");
   } finally {
@@ -1524,7 +1524,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 17 — LEGACY-ONLY PATH IS IGNORED AND DEFAULTS ARE ISOLATED
+// Test 17 - LEGACY-ONLY PATH IS IGNORED AND DEFAULTS ARE ISOLATED
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 17: loadConfig ignores the legacy-only path and returns isolated default objects");
@@ -1561,24 +1561,24 @@ function findOrphanedToolUse(result: any[]): string | null {
 
     assert.ok(
       fs.existsSync(newGlobalConfigPath),
-      "FAIL — loading config should create the new ~/.pi/agent/dcp.jsonc template even when only the legacy path exists",
+      "FAIL - loading config should create the new ~/.pi/agent/dcp.jsonc template even when only the legacy path exists",
     );
     assert.strictEqual(
       configA.compress.minRangeMessages,
       0,
-      "FAIL — legacy-only ~/.config/pi/dcp.jsonc should be ignored",
+      "FAIL - legacy-only ~/.config/pi/dcp.jsonc should be ignored",
     );
     assert.notStrictEqual(
       configA.compress,
       configB.compress,
-      "FAIL — separate loadConfig calls should not share nested config objects",
+      "FAIL - separate loadConfig calls should not share nested config objects",
     );
 
     configA.compress.protectedTools.push("grep");
     assert.deepStrictEqual(
       configB.compress.protectedTools,
       ["compress", "write", "edit"],
-      "FAIL — mutating one loaded config should not affect another or DEFAULT_CONFIG",
+      "FAIL - mutating one loaded config should not affect another or DEFAULT_CONFIG",
     );
     console.log("  PASS: legacy-only path is ignored and returned configs do not share nested defaults");
   } finally {
@@ -1595,7 +1595,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 18 — Mid-band nudges are cadence-gated
+// Test 18 - Mid-band nudges are cadence-gated
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 18: mid-band nudges wait for nudgeFrequency");
@@ -1610,14 +1610,14 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.strictEqual(
     beforeCadence,
     null,
-    "FAIL — mid-band nudges should not fire before nudgeFrequency is reached",
+    "FAIL - mid-band nudges should not fire before nudgeFrequency is reached",
   );
 
   const atCadence = getNudgeType(0.6, { ...makeState(), nudgeCounter: 20 }, config, 0);
   assert.strictEqual(
     atCadence,
     "turn",
-    "FAIL — mid-band nudges should fire once nudgeFrequency is reached",
+    "FAIL - mid-band nudges should fire once nudgeFrequency is reached",
   );
 
   const strongMidBand = getNudgeType(
@@ -1629,28 +1629,28 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.strictEqual(
     strongMidBand,
     "turn",
-    "FAIL — nudgeForce=strong should not change mid-band turn nudges into context nudges",
+    "FAIL - nudgeForce=strong should not change mid-band turn nudges into context nudges",
   );
 
   const iterationBeforeCadence = getNudgeType(0.6, { ...makeState(), nudgeCounter: 19 }, config, 40);
   assert.strictEqual(
     iterationBeforeCadence,
     null,
-    "FAIL — mid-band iteration nudges should not fire before nudgeFrequency is reached",
+    "FAIL - mid-band iteration nudges should not fire before nudgeFrequency is reached",
   );
 
   const iterationAtCadence = getNudgeType(0.6, { ...makeState(), nudgeCounter: 20 }, config, 40);
   assert.strictEqual(
     iterationAtCadence,
     "iteration",
-    "FAIL — mid-band iteration nudges should fire once cadence and iteration thresholds are both reached",
+    "FAIL - mid-band iteration nudges should fire once cadence and iteration thresholds are both reached",
   );
 
   const belowIterationThreshold = getNudgeType(0.6, { ...makeState(), nudgeCounter: 20 }, config, 39);
   assert.strictEqual(
     belowIterationThreshold,
     "turn",
-    "FAIL — mid-band nudges should remain turn nudges until iteration threshold is reached",
+    "FAIL - mid-band nudges should remain turn nudges until iteration threshold is reached",
   );
 
   console.log("  PASS: mid-band nudges are cadence-gated");
@@ -1658,7 +1658,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 19 — Above-max nudges fire immediately
+// Test 19 - Above-max nudges fire immediately
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 19: above-max context nudges fire immediately");
@@ -1672,7 +1672,7 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.strictEqual(
     softNudge,
     "context-soft",
-    "FAIL — above-max context should trigger a soft nudge immediately regardless of cadence",
+    "FAIL - above-max context should trigger a soft nudge immediately regardless of cadence",
   );
 
   const strongConfig = makeConfig();
@@ -1684,14 +1684,14 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.strictEqual(
     strongNudge,
     "context-strong",
-    "FAIL — above-max context should trigger a strong nudge immediately regardless of cadence",
+    "FAIL - above-max context should trigger a strong nudge immediately regardless of cadence",
   );
 
   const aboveMaxWithManyTools = getNudgeType(0.95, { ...makeState(), nudgeCounter: 0 }, softConfig, 40);
   assert.strictEqual(
     aboveMaxWithManyTools,
     "context-soft",
-    "FAIL — above-max context nudges should take precedence over iteration nudges",
+    "FAIL - above-max context nudges should take precedence over iteration nudges",
   );
 
   const state = makeState();
@@ -1699,14 +1699,14 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.strictEqual(
     firstAboveMax,
     "context-soft",
-    "FAIL — above-max context should trigger on the first eligible context event",
+    "FAIL - above-max context should trigger on the first eligible context event",
   );
   state.nudgeCounter = 0;
   const secondAboveMax = getNudgeType(0.9, state, softConfig, 0);
   assert.strictEqual(
     secondAboveMax,
     "context-soft",
-    "FAIL — above-max context should trigger again immediately after the counter reset",
+    "FAIL - above-max context should trigger again immediately after the counter reset",
   );
 
   console.log("  PASS: above-max nudges ignore cadence and fire immediately");
@@ -1714,7 +1714,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 20 — Threshold boundaries
+// Test 20 - Threshold boundaries
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 20: nudge threshold boundaries");
@@ -1729,31 +1729,31 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.strictEqual(
     getNudgeType(0.5, { ...makeState(), nudgeCounter: 999 }, config, 999),
     null,
-    "FAIL — exactly minContextPercent should not trigger a nudge",
+    "FAIL - exactly minContextPercent should not trigger a nudge",
   );
 
   assert.strictEqual(
     getNudgeType(0.5001, { ...makeState(), nudgeCounter: 19 }, config, 999),
     null,
-    "FAIL — just above minContextPercent should still respect cadence",
+    "FAIL - just above minContextPercent should still respect cadence",
   );
 
   assert.strictEqual(
     getNudgeType(0.8, { ...makeState(), nudgeCounter: 19 }, config, 0),
     null,
-    "FAIL — exactly maxContextPercent should remain cadence-gated",
+    "FAIL - exactly maxContextPercent should remain cadence-gated",
   );
 
   assert.strictEqual(
     getNudgeType(0.8, { ...makeState(), nudgeCounter: 20 }, config, 0),
     "turn",
-    "FAIL — exactly maxContextPercent should use mid-band turn behavior at cadence",
+    "FAIL - exactly maxContextPercent should use mid-band turn behavior at cadence",
   );
 
   assert.strictEqual(
     getNudgeType(0.8001, { ...makeState(), nudgeCounter: 0 }, config, 999),
     "context-soft",
-    "FAIL — values above maxContextPercent should immediately trigger context nudges",
+    "FAIL - values above maxContextPercent should immediately trigger context nudges",
   );
 
   console.log("  PASS: threshold boundaries behave as expected");
@@ -1761,7 +1761,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 21 — ROLL-UP COMPRESSION CREATES A PARENT BLOCK
+// Test 21 - ROLL-UP COMPRESSION CREATES A PARENT BLOCK
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 21: roll-up compression supersedes child blocks and prunes to the parent");
@@ -1827,7 +1827,7 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.strictEqual(
     preRollupCompressedCount,
     3,
-    "FAIL — expected three visible child compressed sections before the roll-up",
+    "FAIL - expected three visible child compressed sections before the roll-up",
   );
 
   const notifications: Array<{ message: string; level: string }> = [];
@@ -1841,66 +1841,67 @@ function findOrphanedToolUse(result: any[]): string | null {
           startId: "b1",
           endId: "b3",
           summary:
-            "Combined closed work:\n\n(b1)\n\nThen the next resolved section concluded.\n\n(b2)\n\nFinally the last closed section completed.\n\n(b3)",
+            "Combined closed work:\n\nThen the next resolved section concluded.\n\nFinally the last closed section completed.",
+          supersedes: ["b1", "b2", "b3"],
         },
       ],
     },
     notifications,
   );
 
-  assert.deepStrictEqual(result.details.blockIds, [4], "FAIL — expected parent block id b4");
+  assert.deepStrictEqual(result.details.blockIds, [4], "FAIL - expected parent block id b4");
   assert.deepStrictEqual(
     result.details.supersededBlockIds,
     [1, 2, 3],
-    "FAIL — expected the roll-up result to report superseded child blocks",
+    "FAIL - expected the roll-up result to report superseded child blocks",
   );
   const resultText = result.content?.[0]?.text ?? "";
   assert.ok(
     resultText.includes("Rolled up b1, b2, b3"),
-    "FAIL — expected roll-up result text to report superseded child blocks",
+    "FAIL - expected roll-up result text to report superseded child blocks",
   );
   assert.ok(
     resultText.includes("future context shows the new parent block"),
-    "FAIL — expected roll-up result text to explain future parent-only rendering",
+    "FAIL - expected roll-up result text to explain future parent-only rendering",
   );
   assert.ok(
     notifications[0]?.message.includes("rolled up b1, b2, b3"),
-    "FAIL — expected detailed notification to report rolled-up child blocks",
+    "FAIL - expected detailed notification to report rolled-up child blocks",
   );
 
   const parent = state.compressionBlocks.find((b) => b.id === 4);
   const parentSummary = parent?.summary ?? "";
-  assert.ok(parent, "FAIL — expected the roll-up parent block to exist");
-  assert.strictEqual(parent?.active, true, "FAIL — expected the parent block to be active");
+  assert.ok(parent, "FAIL - expected the roll-up parent block to exist");
+  assert.strictEqual(parent?.active, true, "FAIL - expected the parent block to be active");
   assert.deepStrictEqual(
     parent?.supersedesBlockIds,
     [1, 2, 3],
-    "FAIL — expected the parent block to record its child block IDs",
+    "FAIL - expected the parent block to record its child block IDs",
   );
   assert.ok(
     !parentSummary.includes("First slice summary.") &&
       !parentSummary.includes("Second slice summary.") &&
       !parentSummary.includes("Third slice summary."),
-    "FAIL — expected the stored parent summary to avoid inlining child summaries",
+    "FAIL - expected the stored parent summary to avoid inlining child summaries",
   );
   assert.ok(
     parentSummary.includes("Combined closed work:") &&
       parentSummary.includes("Then the next resolved section concluded.") &&
       parentSummary.includes("Finally the last closed section completed."),
-    "FAIL — expected the stored parent summary to preserve the authored parent text",
+    "FAIL - expected the stored parent summary to preserve the authored parent text",
   );
   assert.ok(
     !parentSummary.includes("(b1)") && !parentSummary.includes("(b2)") && !parentSummary.includes("(b3)"),
-    "FAIL — expected roll-up placeholders to be removed before storage",
+    "FAIL - expected the authored summary not to contain bN placeholder tokens (none were submitted)",
   );
 
   for (const childId of [1, 2, 3]) {
     const child = state.compressionBlocks.find((b) => b.id === childId);
-    assert.strictEqual(child?.active, false, `FAIL — expected child block b${childId} to be inactive`);
+    assert.strictEqual(child?.active, false, `FAIL - expected child block b${childId} to be inactive`);
     assert.strictEqual(
       child?.supersededByBlockId,
       4,
-      `FAIL — expected child block b${childId} to point at parent b4`,
+      `FAIL - expected child block b${childId} to point at parent b4`,
     );
   }
 
@@ -1915,34 +1916,34 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.strictEqual(
     visibleCompressedSections.length,
     1,
-    "FAIL — expected only the parent compressed section to remain visible after roll-up",
+    "FAIL - expected only the parent compressed section to remain visible after roll-up",
   );
   assert.ok(
     visibleCompressedSections[0].content[0].text.includes("<dcp-block-id>b4</dcp-block-id>"),
-    "FAIL — expected the visible compressed section to be the new parent block",
+    "FAIL - expected the visible compressed section to be the new parent block",
   );
-  assert.strictEqual(parent?.anchorTimestamp, 7000, "FAIL — expected the parent block to anchor on the first visible item after the roll-up range");
+  assert.strictEqual(parent?.anchorTimestamp, 7000, "FAIL - expected the parent block to anchor on the first visible item after the roll-up range");
   for (const ts of [1000, 2000, 3000, 4000, 5000, 6000]) {
     assert.ok(
       !postRollupVisible.some((m: any) => m.timestamp === ts),
-      `FAIL — raw message ts=${ts} should be removed by the roll-up parent`,
+      `FAIL - raw message ts=${ts} should be removed by the roll-up parent`,
     );
   }
   assert.ok(
     postRollupVisible.some((m: any) => m.timestamp === 7000),
-    "FAIL — expected the raw message after the roll-up range to remain visible",
+    "FAIL - expected the raw message after the roll-up range to remain visible",
   );
   const postRollupText = JSON.stringify(postRollupVisible);
-  assert.ok(!postRollupText.includes("b1</dcp-block-id>"), "FAIL — child block b1 should not remain visible");
-  assert.ok(!postRollupText.includes("b2</dcp-block-id>"), "FAIL — child block b2 should not remain visible");
-  assert.ok(!postRollupText.includes("b3</dcp-block-id>"), "FAIL — child block b3 should not remain visible");
+  assert.ok(!postRollupText.includes("b1</dcp-block-id>"), "FAIL - child block b1 should not remain visible");
+  assert.ok(!postRollupText.includes("b2</dcp-block-id>"), "FAIL - child block b2 should not remain visible");
+  assert.ok(!postRollupText.includes("b3</dcp-block-id>"), "FAIL - child block b3 should not remain visible");
 
   console.log("  PASS: roll-up created a parent block, anchored correctly, and only the parent remains visible");
   console.log("TEST 21 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 22 — PARTIAL OVERLAP IS REJECTED ATOMICALLY
+// Test 22 - PARTIAL OVERLAP IS REJECTED ATOMICALLY
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 22: partial overlap with an active block is rejected");
@@ -1979,26 +1980,26 @@ function findOrphanedToolUse(result: any[]): string | null {
         ],
       }),
     /partially overlaps existing block b1/,
-    "FAIL — expected partial overlap validation to reject the range",
+    "FAIL - expected partial overlap validation to reject the range",
   );
 
   assert.strictEqual(
     state.compressionBlocks.length,
     1,
-    "FAIL — rejected partial overlap should not create a new compression block",
+    "FAIL - rejected partial overlap should not create a new compression block",
   );
-  assert.strictEqual(state.compressionBlocks[0]?.active, true, "FAIL — existing block should remain active");
-  assert.strictEqual(state.nextBlockId, 2, "FAIL — rejected partial overlap should not advance nextBlockId");
+  assert.strictEqual(state.compressionBlocks[0]?.active, true, "FAIL - existing block should remain active");
+  assert.strictEqual(state.nextBlockId, 2, "FAIL - rejected partial overlap should not advance nextBlockId");
 
   console.log("  PASS: partial overlap rejected without mutating state");
   console.log("TEST 22 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 23 — ROLL-UP PLACEHOLDERS ARE STRICTLY VALIDATED
+// Test 23 - ROLL-UP SUPERSEDES FIELD IS STRICTLY VALIDATED
 // ---------------------------------------------------------------------------
 {
-  console.log("TEST 23: roll-up compression requires each contained placeholder exactly once");
+  console.log("TEST 23: roll-up compression requires each contained block in supersedes exactly once");
 
   const messages: any[] = [
     { role: "user", content: [{ type: "text", text: "alpha" }], timestamp: 1000 },
@@ -2045,29 +2046,30 @@ function findOrphanedToolUse(result: any[]): string | null {
           {
             startId: "b1",
             endId: "b2",
-            summary: "Repeated child:\n\n(b1)\n\nAgain:\n\n(b1)",
+            summary: "Repeated child reference attempted in supersedes.",
+            supersedes: ["b1", "b1"],
           },
         ],
       }),
     /Missing: b2\..*Duplicated: b1\./s,
-    "FAIL — expected strict placeholder validation to reject the malformed roll-up summary",
+    "FAIL - expected strict supersedes validation to reject the malformed roll-up call",
   );
 
   assert.strictEqual(
     state.compressionBlocks.length,
     2,
-    "FAIL — rejected roll-up should not create a parent block",
+    "FAIL - rejected roll-up should not create a parent block",
   );
-  assert.strictEqual(state.nextBlockId, 3, "FAIL — rejected roll-up should not advance nextBlockId");
-  assert.strictEqual(state.compressionBlocks[0]?.active, true, "FAIL — child b1 should remain active");
-  assert.strictEqual(state.compressionBlocks[1]?.active, true, "FAIL — child b2 should remain active");
+  assert.strictEqual(state.nextBlockId, 3, "FAIL - rejected roll-up should not advance nextBlockId");
+  assert.strictEqual(state.compressionBlocks[0]?.active, true, "FAIL - child b1 should remain active");
+  assert.strictEqual(state.compressionBlocks[1]?.active, true, "FAIL - child b2 should remain active");
 
-  console.log("  PASS: malformed roll-up placeholders rejected without mutating state");
+  console.log("  PASS: malformed roll-up supersedes rejected without mutating state");
   console.log("TEST 23 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 24 — DECOMPRESSING A ROLL-UP REACTIVATES DIRECT CHILDREN
+// Test 24 - DECOMPRESSING A ROLL-UP REACTIVATES DIRECT CHILDREN
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 24: /dcp decompress shows supersession and reactivates direct children");
@@ -2114,20 +2116,20 @@ function findOrphanedToolUse(result: any[]): string | null {
   ]);
 
   const listNotifications = await executeDcpCommand(state, makeConfig(), "decompress");
-  assert.ok(listNotifications[0]?.message.includes("Active compression blocks:"), "FAIL — expected the block listing to show the active section");
-  assert.ok(listNotifications[0]?.message.includes("Superseded compression blocks:"), "FAIL — expected the block listing to show the superseded section");
-  assert.ok(listNotifications[0]?.message.includes("supersedes b1, b2"), "FAIL — expected the active parent to describe its child blocks");
+  assert.ok(listNotifications[0]?.message.includes("Active compression blocks:"), "FAIL - expected the block listing to show the active section");
+  assert.ok(listNotifications[0]?.message.includes("Superseded compression blocks:"), "FAIL - expected the block listing to show the superseded section");
+  assert.ok(listNotifications[0]?.message.includes("supersedes b1, b2"), "FAIL - expected the active parent to describe its child blocks");
 
   const decompressNotifications = await executeDcpCommand(state, makeConfig(), "decompress 3");
 
-  assert.strictEqual(state.compressionBlocks[2]?.active, false, "FAIL — expected the parent block to be deactivated");
-  assert.strictEqual(state.compressionBlocks[0]?.active, true, "FAIL — expected child b1 to reactivate");
-  assert.strictEqual(state.compressionBlocks[1]?.active, true, "FAIL — expected child b2 to reactivate");
-  assert.strictEqual(state.compressionBlocks[0]?.supersededByBlockId, undefined, "FAIL — expected child b1 to clear supersededByBlockId");
-  assert.strictEqual(state.compressionBlocks[1]?.supersededByBlockId, undefined, "FAIL — expected child b2 to clear supersededByBlockId");
+  assert.strictEqual(state.compressionBlocks[2]?.active, false, "FAIL - expected the parent block to be deactivated");
+  assert.strictEqual(state.compressionBlocks[0]?.active, true, "FAIL - expected child b1 to reactivate");
+  assert.strictEqual(state.compressionBlocks[1]?.active, true, "FAIL - expected child b2 to reactivate");
+  assert.strictEqual(state.compressionBlocks[0]?.supersededByBlockId, undefined, "FAIL - expected child b1 to clear supersededByBlockId");
+  assert.strictEqual(state.compressionBlocks[1]?.supersededByBlockId, undefined, "FAIL - expected child b2 to clear supersededByBlockId");
   assert.ok(
     decompressNotifications[0]?.message.includes("Reactivated direct child blocks: b1, b2"),
-    "FAIL — expected parent decompression to report reactivated child blocks",
+    "FAIL - expected parent decompression to report reactivated child blocks",
   );
 
   console.log("  PASS: /dcp decompress restored the direct child blocks of a roll-up parent");
@@ -2135,7 +2137,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 25 — EFFECTIVE-RANGE OVERLAP IS REJECTED IN BATCHES
+// Test 25 - EFFECTIVE-RANGE OVERLAP IS REJECTED IN BATCHES
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 25: batched ranges that overlap after atomic expansion are rejected");
@@ -2163,21 +2165,21 @@ function findOrphanedToolUse(result: any[]): string | null {
         ],
       }),
     /after assistant\/tool-result atomic expansion/,
-    "FAIL — expected effective-range overlap validation to reject the batch",
+    "FAIL - expected effective-range overlap validation to reject the batch",
   );
 
-  assert.strictEqual(state.compressionBlocks.length, 0, "FAIL — rejected effective-overlap batch should create no blocks");
-  assert.strictEqual(state.nextBlockId, 1, "FAIL — rejected effective-overlap batch should not advance nextBlockId");
+  assert.strictEqual(state.compressionBlocks.length, 0, "FAIL - rejected effective-overlap batch should create no blocks");
+  assert.strictEqual(state.nextBlockId, 1, "FAIL - rejected effective-overlap batch should not advance nextBlockId");
 
   console.log("  PASS: effective-range overlap is rejected before any block is created");
   console.log("TEST 25 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 26 — UNEXPECTED PLACEHOLDERS ARE REJECTED
+// Test 26 - UNEXPECTED SUPERSEDES ENTRIES ARE REJECTED
 // ---------------------------------------------------------------------------
 {
-  console.log("TEST 26: roll-up rejects unexpected placeholders outside the selected range");
+  console.log("TEST 26: roll-up rejects supersedes entries outside the selected range");
 
   const messages: any[] = [
     { role: "user", content: [{ type: "text", text: "alpha" }], timestamp: 1000 },
@@ -2219,30 +2221,31 @@ function findOrphanedToolUse(result: any[]): string | null {
   await assert.rejects(
     () =>
       executeCompressTool(state, config, {
-        topic: "bad placeholders",
+        topic: "bad supersedes",
         ranges: [
           {
             startId: "b1",
             endId: "b1",
-            summary: "Selected child:\n\n(b1)\n\nUnexpected extra child:\n\n(b2)",
+            summary: "Roll-up summary that incorrectly claims to supersede b2 in addition to b1.",
+            supersedes: ["b1", "b2"],
           },
         ],
       }),
     /Unexpected: b2\./,
-    "FAIL — expected an unexpected-placeholder validation error",
+    "FAIL - expected an unexpected-supersedes validation error",
   );
 
-  assert.strictEqual(state.compressionBlocks.length, 2, "FAIL — rejected placeholder validation should not create a new block");
-  assert.strictEqual(state.nextBlockId, 3, "FAIL — rejected placeholder validation should not advance nextBlockId");
-  assert.strictEqual(state.compressionBlocks[0]?.active, true, "FAIL — block b1 should remain active");
-  assert.strictEqual(state.compressionBlocks[1]?.active, true, "FAIL — block b2 should remain active");
+  assert.strictEqual(state.compressionBlocks.length, 2, "FAIL - rejected supersedes validation should not create a new block");
+  assert.strictEqual(state.nextBlockId, 3, "FAIL - rejected supersedes validation should not advance nextBlockId");
+  assert.strictEqual(state.compressionBlocks[0]?.active, true, "FAIL - block b1 should remain active");
+  assert.strictEqual(state.compressionBlocks[1]?.active, true, "FAIL - block b2 should remain active");
 
-  console.log("  PASS: unexpected placeholders are rejected without mutating state");
+  console.log("  PASS: unexpected supersedes entries are rejected without mutating state");
   console.log("TEST 26 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 27 — ROLL-UP BATCH VALIDATION IS ATOMIC
+// Test 27 - ROLL-UP BATCH VALIDATION IS ATOMIC
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 27: mixed roll-up batch rejection does not create or supersede blocks");
@@ -2318,25 +2321,27 @@ function findOrphanedToolUse(result: any[]): string | null {
           {
             startId: "b1",
             endId: "b2",
-            summary: "Valid roll-up:\n\n(b1)\n\nThen\n\n(b2)",
+            summary: "Valid roll-up.",
+            supersedes: ["b1", "b2"],
           },
           {
             startId: "b3",
             endId: "b4",
-            summary: "Invalid roll-up:\n\n(b3)",
+            summary: "Invalid roll-up: missing b4 in supersedes.",
+            supersedes: ["b3"],
           },
         ],
       }),
     /Missing: b4\./,
-    "FAIL — expected the invalid roll-up in the batch to reject the whole batch",
+    "FAIL - expected the invalid roll-up in the batch to reject the whole batch",
   );
 
-  assert.strictEqual(state.compressionBlocks.length, 4, "FAIL — rejected roll-up batch should not create parent blocks");
-  assert.strictEqual(state.nextBlockId, 5, "FAIL — rejected roll-up batch should not advance nextBlockId");
+  assert.strictEqual(state.compressionBlocks.length, 4, "FAIL - rejected roll-up batch should not create parent blocks");
+  assert.strictEqual(state.nextBlockId, 5, "FAIL - rejected roll-up batch should not advance nextBlockId");
   for (const childId of [1, 2, 3, 4]) {
     const child = state.compressionBlocks.find((b) => b.id === childId);
-    assert.strictEqual(child?.active, true, `FAIL — child block b${childId} should remain active after batch rejection`);
-    assert.strictEqual(child?.supersededByBlockId, undefined, `FAIL — child block b${childId} should not be superseded after batch rejection`);
+    assert.strictEqual(child?.active, true, `FAIL - child block b${childId} should remain active after batch rejection`);
+    assert.strictEqual(child?.supersededByBlockId, undefined, `FAIL - child block b${childId} should not be superseded after batch rejection`);
   }
 
   console.log("  PASS: roll-up batch validation remains atomic");
@@ -2344,7 +2349,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 28 — NESTED DECOMPRESSION REACTIVATES ONLY DIRECT CHILDREN
+// Test 28 - NESTED DECOMPRESSION REACTIVATES ONLY DIRECT CHILDREN
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 28: nested decompression reactivates only direct child blocks");
@@ -2419,16 +2424,16 @@ function findOrphanedToolUse(result: any[]): string | null {
 
   const notifications = await executeDcpCommand(state, makeConfig(), "decompress 5");
 
-  assert.strictEqual(state.compressionBlocks[4]?.active, false, "FAIL — expected the top parent to deactivate");
-  assert.strictEqual(state.compressionBlocks[2]?.active, true, "FAIL — expected direct child b3 to reactivate");
-  assert.strictEqual(state.compressionBlocks[3]?.active, true, "FAIL — expected direct child b4 to reactivate");
-  assert.strictEqual(state.compressionBlocks[0]?.active, false, "FAIL — grandchild b1 should remain inactive under b3");
-  assert.strictEqual(state.compressionBlocks[1]?.active, false, "FAIL — grandchild b2 should remain inactive under b3");
-  assert.strictEqual(state.compressionBlocks[0]?.supersededByBlockId, 3, "FAIL — grandchild b1 should remain superseded by b3");
-  assert.strictEqual(state.compressionBlocks[1]?.supersededByBlockId, 3, "FAIL — grandchild b2 should remain superseded by b3");
+  assert.strictEqual(state.compressionBlocks[4]?.active, false, "FAIL - expected the top parent to deactivate");
+  assert.strictEqual(state.compressionBlocks[2]?.active, true, "FAIL - expected direct child b3 to reactivate");
+  assert.strictEqual(state.compressionBlocks[3]?.active, true, "FAIL - expected direct child b4 to reactivate");
+  assert.strictEqual(state.compressionBlocks[0]?.active, false, "FAIL - grandchild b1 should remain inactive under b3");
+  assert.strictEqual(state.compressionBlocks[1]?.active, false, "FAIL - grandchild b2 should remain inactive under b3");
+  assert.strictEqual(state.compressionBlocks[0]?.supersededByBlockId, 3, "FAIL - grandchild b1 should remain superseded by b3");
+  assert.strictEqual(state.compressionBlocks[1]?.supersededByBlockId, 3, "FAIL - grandchild b2 should remain superseded by b3");
   assert.ok(
     notifications[0]?.message.includes("Reactivated direct child blocks: b3, b4"),
-    "FAIL — expected nested decompression to report only direct child reactivation",
+    "FAIL - expected nested decompression to report only direct child reactivation",
   );
 
   console.log("  PASS: nested decompression restores only the direct children of the parent block");
@@ -2436,7 +2441,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 29 — REVERSED VISIBLE BOUNDARIES ARE REJECTED
+// Test 29 - REVERSED VISIBLE BOUNDARIES ARE REJECTED
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 29: reversed visible boundaries are rejected even when minRangeMessages is disabled");
@@ -2491,21 +2496,21 @@ function findOrphanedToolUse(result: any[]): string | null {
         ],
       }),
     /must appear before end/,
-    "FAIL — expected reversed visible boundaries to be rejected",
+    "FAIL - expected reversed visible boundaries to be rejected",
   );
 
-  assert.strictEqual(state.compressionBlocks.length, 2, "FAIL — reversed range should not create a new block");
-  assert.strictEqual(state.nextBlockId, 3, "FAIL — reversed range should not advance nextBlockId");
+  assert.strictEqual(state.compressionBlocks.length, 2, "FAIL - reversed range should not create a new block");
+  assert.strictEqual(state.nextBlockId, 3, "FAIL - reversed range should not advance nextBlockId");
 
   console.log("  PASS: reversed visible boundaries are rejected under the default config");
   console.log("TEST 29 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 30 — NON-ROLL-UP PLACEHOLDERS ARE REJECTED
+// Test 30 - NON-ROLL-UP SUPERSEDES ARE REJECTED
 // ---------------------------------------------------------------------------
 {
-  console.log("TEST 30: non-roll-up ranges cannot include block placeholders");
+  console.log("TEST 30: non-roll-up ranges cannot declare supersedes entries");
 
   const state = makeState();
   state.messageIdSnapshot.set("m001", 1000);
@@ -2514,28 +2519,29 @@ function findOrphanedToolUse(result: any[]): string | null {
   await assert.rejects(
     () =>
       executeCompressTool(state, makeConfig(), {
-        topic: "bad non-roll-up placeholder",
+        topic: "bad non-roll-up supersedes",
         ranges: [
           {
             startId: "m001",
             endId: "m002",
-            summary: "This raw range must not mention (b1).",
+            summary: "Plain raw range; no contained blocks.",
+            supersedes: ["b1"],
           },
         ],
       }),
-    /does not contain any active compression blocks.*must not include block placeholders/s,
-    "FAIL — expected non-roll-up placeholder usage to be rejected",
+    /does not fully contain any active compression blocks.*supersedes.*must be omitted or empty/s,
+    "FAIL - expected non-roll-up supersedes usage to be rejected",
   );
 
-  assert.strictEqual(state.compressionBlocks.length, 0, "FAIL — rejected non-roll-up placeholder should not create a block");
-  assert.strictEqual(state.nextBlockId, 1, "FAIL — rejected non-roll-up placeholder should not advance nextBlockId");
+  assert.strictEqual(state.compressionBlocks.length, 0, "FAIL - rejected non-roll-up supersedes should not create a block");
+  assert.strictEqual(state.nextBlockId, 1, "FAIL - rejected non-roll-up supersedes should not advance nextBlockId");
 
-  console.log("  PASS: raw-only ranges reject block placeholders");
+  console.log("  PASS: raw-only ranges reject supersedes entries");
   console.log("TEST 30 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 31 — DECOMPRESSION FAILS ATOMICALLY WHEN A CHILD IS MISSING
+// Test 31 - DECOMPRESSION FAILS ATOMICALLY WHEN A CHILD IS MISSING
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 31: parent decompression fails atomically when a direct child is missing");
@@ -2570,12 +2576,12 @@ function findOrphanedToolUse(result: any[]): string | null {
 
   const notifications = await executeDcpCommand(state, makeConfig(), "decompress 3");
 
-  assert.strictEqual(state.compressionBlocks[1]?.active, true, "FAIL — parent should remain active when a child is missing");
-  assert.strictEqual(state.compressionBlocks[0]?.active, false, "FAIL — existing child should remain inactive when decompression fails");
-  assert.strictEqual(notifications[0]?.level, "error", "FAIL — expected a missing-child decompression error");
+  assert.strictEqual(state.compressionBlocks[1]?.active, true, "FAIL - parent should remain active when a child is missing");
+  assert.strictEqual(state.compressionBlocks[0]?.active, false, "FAIL - existing child should remain inactive when decompression fails");
+  assert.strictEqual(notifications[0]?.level, "error", "FAIL - expected a missing-child decompression error");
   assert.ok(
     notifications[0]?.message.includes("missing direct child block b2"),
-    "FAIL — expected the missing child to be reported",
+    "FAIL - expected the missing child to be reported",
   );
 
   console.log("  PASS: missing-child decompression leaves hierarchy unchanged");
@@ -2583,7 +2589,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 32 — BN RANGES PARTICIPATE IN EFFECTIVE OVERLAP CHECKS
+// Test 32 - BN RANGES PARTICIPATE IN EFFECTIVE OVERLAP CHECKS
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 32: bN-based ranges are rejected when they overlap after atomic expansion");
@@ -2633,7 +2639,8 @@ function findOrphanedToolUse(result: any[]): string | null {
           {
             startId: "b1",
             endId: "m003",
-            summary: "Roll up earlier work:\n\n(b1)\n\nThen include the tool-result span.",
+            summary: "Roll up earlier work and include the tool-result span.",
+            supersedes: ["b1"],
           },
           {
             startId: "m002",
@@ -2643,18 +2650,18 @@ function findOrphanedToolUse(result: any[]): string | null {
         ],
       }),
     /after assistant\/tool-result atomic expansion/,
-    "FAIL — expected a bN-based effective overlap rejection",
+    "FAIL - expected a bN-based effective overlap rejection",
   );
 
-  assert.strictEqual(state.compressionBlocks.length, 1, "FAIL — rejected bN overlap should not create new blocks");
-  assert.strictEqual(state.nextBlockId, 2, "FAIL — rejected bN overlap should not advance nextBlockId");
+  assert.strictEqual(state.compressionBlocks.length, 1, "FAIL - rejected bN overlap should not create new blocks");
+  assert.strictEqual(state.nextBlockId, 2, "FAIL - rejected bN overlap should not advance nextBlockId");
 
   console.log("  PASS: bN ranges use the same effective overlap model as raw message ranges");
   console.log("TEST 32 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 33 — NESTED ROLL-UPS WORK END-TO-END
+// Test 33 - NESTED ROLL-UPS WORK END-TO-END
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 33: nested roll-ups can be created end-to-end and restore visible children on decompression");
@@ -2715,19 +2722,20 @@ function findOrphanedToolUse(result: any[]): string | null {
       {
         startId: "b1",
         endId: "b2",
-        summary: "Child parent:\n\n(b1)\n\nThen\n\n(b2)",
+        summary: "Child parent covering b1 and b2.",
+        supersedes: ["b1", "b2"],
       },
     ],
   });
 
   const childParent = state.compressionBlocks.find((b) => b.id === 4);
-  assert.ok(childParent?.active, "FAIL — expected the first nested parent to be active");
-  assert.deepStrictEqual(childParent?.supersedesBlockIds, [1, 2], "FAIL — expected b4 to supersede b1 and b2");
-  assert.strictEqual(state.compressionBlocks[0]?.supersededByBlockId, 4, "FAIL — expected b1 to point at b4");
-  assert.strictEqual(state.compressionBlocks[1]?.supersededByBlockId, 4, "FAIL — expected b2 to point at b4");
-  assert.ok(!childParent?.summary.includes("First leaf summary."), "FAIL — expected nested parent b4 to avoid inlining child b1 summary");
-  assert.ok(!childParent?.summary.includes("Second leaf summary."), "FAIL — expected nested parent b4 to avoid inlining child b2 summary");
-  assert.ok(!childParent?.summary.includes("(b1)") && !childParent?.summary.includes("(b2)"), "FAIL — expected nested parent b4 placeholders to be removed before storage");
+  assert.ok(childParent?.active, "FAIL - expected the first nested parent to be active");
+  assert.deepStrictEqual(childParent?.supersedesBlockIds, [1, 2], "FAIL - expected b4 to supersede b1 and b2");
+  assert.strictEqual(state.compressionBlocks[0]?.supersededByBlockId, 4, "FAIL - expected b1 to point at b4");
+  assert.strictEqual(state.compressionBlocks[1]?.supersededByBlockId, 4, "FAIL - expected b2 to point at b4");
+  assert.ok(!childParent?.summary.includes("First leaf summary."), "FAIL - expected nested parent b4 to avoid inlining child b1 summary");
+  assert.ok(!childParent?.summary.includes("Second leaf summary."), "FAIL - expected nested parent b4 to avoid inlining child b2 summary");
+  assert.ok(!childParent?.summary.includes("(b1)") && !childParent?.summary.includes("(b2)"), "FAIL - expected nested parent b4 to omit bN placeholder tokens");
 
   applyPruning(messages, state, config);
 
@@ -2737,43 +2745,44 @@ function findOrphanedToolUse(result: any[]): string | null {
       {
         startId: "b4",
         endId: "b3",
-        summary: "Top parent:\n\n(b4)\n\nThen\n\n(b3)",
+        summary: "Top parent rolling up b4 and b3.",
+        supersedes: ["b4", "b3"],
       },
     ],
   });
 
   const topParent = state.compressionBlocks.find((b) => b.id === 5);
-  assert.ok(topParent?.active, "FAIL — expected the top nested parent to be active");
-  assert.deepStrictEqual(topParent?.supersedesBlockIds, [4, 3], "FAIL — expected b5 to supersede b4 and b3");
-  assert.strictEqual(state.compressionBlocks[2]?.supersededByBlockId, 5, "FAIL — expected b3 to point at b5");
-  assert.strictEqual(state.compressionBlocks[3]?.supersededByBlockId, 5, "FAIL — expected b4 to point at b5");
-  assert.ok(!topParent?.summary.includes("Third leaf summary."), "FAIL — expected top parent b5 to avoid inlining child b3 summary");
-  assert.ok(!topParent?.summary.includes("Child parent"), "FAIL — expected top parent b5 to avoid inlining child b4 summary text");
-  assert.ok(!topParent?.summary.includes("(b4)") && !topParent?.summary.includes("(b3)"), "FAIL — expected top parent b5 placeholders to be removed before storage");
+  assert.ok(topParent?.active, "FAIL - expected the top nested parent to be active");
+  assert.deepStrictEqual(topParent?.supersedesBlockIds, [4, 3], "FAIL - expected b5 to supersede b4 and b3");
+  assert.strictEqual(state.compressionBlocks[2]?.supersededByBlockId, 5, "FAIL - expected b3 to point at b5");
+  assert.strictEqual(state.compressionBlocks[3]?.supersededByBlockId, 5, "FAIL - expected b4 to point at b5");
+  assert.ok(!topParent?.summary.includes("Third leaf summary."), "FAIL - expected top parent b5 to avoid inlining child b3 summary");
+  assert.ok(!topParent?.summary.includes("Child parent"), "FAIL - expected top parent b5 to avoid inlining child b4 summary text");
+  assert.ok(!topParent?.summary.includes("(b4)") && !topParent?.summary.includes("(b3)"), "FAIL - expected top parent b5 summary to omit bN placeholder tokens");
 
   const topVisible = applyPruning(messages, state, config);
   const topVisibleText = JSON.stringify(topVisible);
-  assert.ok(topVisibleText.includes("b5</dcp-block-id>"), "FAIL — expected b5 to be visible after the top roll-up");
-  assert.ok(!topVisibleText.includes("b4</dcp-block-id>"), "FAIL — b4 should be hidden under the top parent");
-  assert.ok(!topVisibleText.includes("b3</dcp-block-id>"), "FAIL — b3 should be hidden under the top parent");
-  assert.ok(!topVisibleText.includes("b1</dcp-block-id>"), "FAIL — b1 should remain hidden under b4");
-  assert.ok(!topVisibleText.includes("b2</dcp-block-id>"), "FAIL — b2 should remain hidden under b4");
+  assert.ok(topVisibleText.includes("b5</dcp-block-id>"), "FAIL - expected b5 to be visible after the top roll-up");
+  assert.ok(!topVisibleText.includes("b4</dcp-block-id>"), "FAIL - b4 should be hidden under the top parent");
+  assert.ok(!topVisibleText.includes("b3</dcp-block-id>"), "FAIL - b3 should be hidden under the top parent");
+  assert.ok(!topVisibleText.includes("b1</dcp-block-id>"), "FAIL - b1 should remain hidden under b4");
+  assert.ok(!topVisibleText.includes("b2</dcp-block-id>"), "FAIL - b2 should remain hidden under b4");
 
   await executeDcpCommand(state, config, "decompress 5");
   const decompressedVisible = applyPruning(messages, state, config);
   const decompressedText = JSON.stringify(decompressedVisible);
-  assert.ok(!decompressedText.includes("b5</dcp-block-id>"), "FAIL — b5 should disappear after decompression");
-  assert.ok(decompressedText.includes("b4</dcp-block-id>"), "FAIL — b4 should become visible after decompressing b5");
-  assert.ok(decompressedText.includes("b3</dcp-block-id>"), "FAIL — b3 should become visible after decompressing b5");
-  assert.ok(!decompressedText.includes("b1</dcp-block-id>"), "FAIL — b1 should stay hidden under active b4");
-  assert.ok(!decompressedText.includes("b2</dcp-block-id>"), "FAIL — b2 should stay hidden under active b4");
+  assert.ok(!decompressedText.includes("b5</dcp-block-id>"), "FAIL - b5 should disappear after decompression");
+  assert.ok(decompressedText.includes("b4</dcp-block-id>"), "FAIL - b4 should become visible after decompressing b5");
+  assert.ok(decompressedText.includes("b3</dcp-block-id>"), "FAIL - b3 should become visible after decompressing b5");
+  assert.ok(!decompressedText.includes("b1</dcp-block-id>"), "FAIL - b1 should stay hidden under active b4");
+  assert.ok(!decompressedText.includes("b2</dcp-block-id>"), "FAIL - b2 should stay hidden under active b4");
 
   console.log("  PASS: nested roll-ups create the correct hierarchy and restore only direct visible children on decompression");
   console.log("TEST 33 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 34 — DECOMPRESSION FAILS ATOMICALLY WHEN CHILD LINKAGE IS INCONSISTENT
+// Test 34 - DECOMPRESSION FAILS ATOMICALLY WHEN CHILD LINKAGE IS INCONSISTENT
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 34: parent decompression fails atomically when child linkage is inconsistent");
@@ -2806,13 +2815,13 @@ function findOrphanedToolUse(result: any[]): string | null {
 
   const notifications = await executeDcpCommand(state, makeConfig(), "decompress 2");
 
-  assert.strictEqual(state.compressionBlocks[1]?.active, true, "FAIL — parent should remain active when linkage is inconsistent");
-  assert.strictEqual(state.compressionBlocks[0]?.active, true, "FAIL — child should remain unchanged when linkage is inconsistent");
-  assert.strictEqual(state.compressionBlocks[0]?.supersededByBlockId, undefined, "FAIL — child linkage should remain unchanged");
-  assert.strictEqual(notifications[0]?.level, "error", "FAIL — expected an inconsistency error notification");
+  assert.strictEqual(state.compressionBlocks[1]?.active, true, "FAIL - parent should remain active when linkage is inconsistent");
+  assert.strictEqual(state.compressionBlocks[0]?.active, true, "FAIL - child should remain unchanged when linkage is inconsistent");
+  assert.strictEqual(state.compressionBlocks[0]?.supersededByBlockId, undefined, "FAIL - child linkage should remain unchanged");
+  assert.strictEqual(notifications[0]?.level, "error", "FAIL - expected an inconsistency error notification");
   assert.ok(
     notifications[0]?.message.includes("child linkage is inconsistent"),
-    "FAIL — expected the inconsistent child linkage to be reported",
+    "FAIL - expected the inconsistent child linkage to be reported",
   );
 
   console.log("  PASS: inconsistent child linkage is rejected atomically");
@@ -2820,7 +2829,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 35 — UNBRIDGED PASSTHROUGH MESSAGES ARE NOT SWALLOWED
+// Test 35 - UNBRIDGED PASSTHROUGH MESSAGES ARE NOT SWALLOWED
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 35: passthrough messages are only expanded when they bridge to a matching result");
@@ -2850,11 +2859,11 @@ function findOrphanedToolUse(result: any[]): string | null {
 
   assert.ok(
     result.some((message: any) => message.role === "branch_summary" && message.timestamp === 2500),
-    "FAIL — an unbridged passthrough message should remain outside the compressed range",
+    "FAIL - an unbridged passthrough message should remain outside the compressed range",
   );
   assert.ok(
     !result.some((message: any) => message.role === "assistant" && message.timestamp === 2000),
-    "FAIL — the selected assistant message should still be compressed",
+    "FAIL - the selected assistant message should still be compressed",
   );
   assert.ok(
     result.some(
@@ -2868,7 +2877,7 @@ function findOrphanedToolUse(result: any[]): string | null {
             part.text.includes("[Compressed section: assistant only]"),
         ),
     ),
-    "FAIL — expected a synthetic summary message for the compressed assistant range",
+    "FAIL - expected a synthetic summary message for the compressed assistant range",
   );
 
   console.log("  PASS: unbridged passthrough messages are preserved");
@@ -2876,7 +2885,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 36 — SWEEP FALLS BACK TO BRANCH TOOL NAMES
+// Test 36 - SWEEP FALLS BACK TO BRANCH TOOL NAMES
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 36: /dcp sweep protects built-in safe tools even without ToolRecord state");
@@ -2935,12 +2944,12 @@ function findOrphanedToolUse(result: any[]): string | null {
 
   const notifications = await executeDcpCommand(state, makeConfig(), "sweep", branch);
 
-  assert.deepStrictEqual([...state.prunedToolIds].sort(), ["toolu_read"], "FAIL — sweep should only prune the unprotected tool output");
-  assert.strictEqual(state.totalPruneCount, 1, "FAIL — sweep should contribute exactly one pruning operation");
-  assert.strictEqual(notifications[0]?.level, "info", "FAIL — expected an info notification from sweep");
+  assert.deepStrictEqual([...state.prunedToolIds].sort(), ["toolu_read"], "FAIL - sweep should only prune the unprotected tool output");
+  assert.strictEqual(state.totalPruneCount, 1, "FAIL - sweep should contribute exactly one pruning operation");
+  assert.strictEqual(notifications[0]?.level, "info", "FAIL - expected an info notification from sweep");
   assert.ok(
     notifications[0]?.message.includes("Swept 1 tool output"),
-    "FAIL — expected sweep to report only one pruned tool output",
+    "FAIL - expected sweep to report only one pruned tool output",
   );
 
   console.log("  PASS: /dcp sweep falls back to branch tool names to protect safe outputs");
@@ -2948,7 +2957,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 37 — TOKEN SAVINGS STAY STABLE ACROSS REPEATED PASSES
+// Test 37 - TOKEN SAVINGS STAY STABLE ACROSS REPEATED PASSES
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 37: tokensSaved stays stable across repeated application of the same block");
@@ -2977,16 +2986,16 @@ function findOrphanedToolUse(result: any[]): string | null {
   const firstTokensSaved = state.tokensSaved;
   applyPruning(messages, state, makeConfig());
 
-  assert.ok(firstTokensSaved > 0, "FAIL — expected the first pruning pass to count some saved tokens");
+  assert.ok(firstTokensSaved > 0, "FAIL - expected the first pruning pass to count some saved tokens");
   assert.strictEqual(
     state.tokensSaved,
     firstTokensSaved,
-    "FAIL — repeated pruning passes should not recount savings for the same active block",
+    "FAIL - repeated pruning passes should not recount savings for the same active block",
   );
   assert.strictEqual(
     state.compressionBlocks[0]?.tokensSavedEstimate,
     firstTokensSaved,
-    "FAIL — expected the block to retain its current token-savings estimate",
+    "FAIL - expected the block to retain its current token-savings estimate",
   );
 
   console.log("  PASS: token savings remain stable across repeated pruning passes");
@@ -2994,7 +3003,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 38 — DEDUP PRUNE COUNTS ARE IDEMPOTENT
+// Test 38 - DEDUP PRUNE COUNTS ARE IDEMPOTENT
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 38: deduplication does not recount pruning operations on repeated passes");
@@ -3056,16 +3065,16 @@ function findOrphanedToolUse(result: any[]): string | null {
   const firstPruneCount = state.totalPruneCount;
   applyPruning(messages, state, config);
 
-  assert.deepStrictEqual([...state.prunedToolIds], ["toolu_old"], "FAIL — deduplication should prune only the older duplicate");
-  assert.strictEqual(firstPruneCount, 1, "FAIL — first deduplication pass should record exactly one pruning operation");
-  assert.strictEqual(state.totalPruneCount, firstPruneCount, "FAIL — repeated deduplication passes should not inflate totalPruneCount");
+  assert.deepStrictEqual([...state.prunedToolIds], ["toolu_old"], "FAIL - deduplication should prune only the older duplicate");
+  assert.strictEqual(firstPruneCount, 1, "FAIL - first deduplication pass should record exactly one pruning operation");
+  assert.strictEqual(state.totalPruneCount, firstPruneCount, "FAIL - repeated deduplication passes should not inflate totalPruneCount");
 
   console.log("  PASS: deduplication prune counts remain stable across repeated passes");
   console.log("TEST 38 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 39 — ERROR PURGE COUNTS ARE IDEMPOTENT
+// Test 39 - ERROR PURGE COUNTS ARE IDEMPOTENT
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 39: error purging does not recount pruning operations on repeated passes");
@@ -3110,16 +3119,16 @@ function findOrphanedToolUse(result: any[]): string | null {
   const firstPruneCount = state.totalPruneCount;
   applyPruning(messages, state, config);
 
-  assert.deepStrictEqual([...state.prunedToolIds], ["toolu_error"], "FAIL — error purging should prune the stale error output");
-  assert.strictEqual(firstPruneCount, 1, "FAIL — first error-purge pass should record exactly one pruning operation");
-  assert.strictEqual(state.totalPruneCount, firstPruneCount, "FAIL — repeated error-purge passes should not inflate totalPruneCount");
+  assert.deepStrictEqual([...state.prunedToolIds], ["toolu_error"], "FAIL - error purging should prune the stale error output");
+  assert.strictEqual(firstPruneCount, 1, "FAIL - first error-purge pass should record exactly one pruning operation");
+  assert.strictEqual(state.totalPruneCount, firstPruneCount, "FAIL - repeated error-purge passes should not inflate totalPruneCount");
 
   console.log("  PASS: error-purge prune counts remain stable across repeated passes");
   console.log("TEST 39 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 40 — AUTOMATIC PROTECTION USES TOOL RECORD NAMES
+// Test 40 - AUTOMATIC PROTECTION USES TOOL RECORD NAMES
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 40: automatic pruning uses canonical ToolRecord names for protection checks");
@@ -3179,15 +3188,15 @@ function findOrphanedToolUse(result: any[]): string | null {
 
   applyPruning(messages, state, config);
 
-  assert.deepStrictEqual([...state.prunedToolIds], [], "FAIL — protected tools should not be pruned even if branch metadata is inconsistent");
-  assert.strictEqual(state.totalPruneCount, 0, "FAIL — protected-tool skips should not affect pruning statistics");
+  assert.deepStrictEqual([...state.prunedToolIds], [], "FAIL - protected tools should not be pruned even if branch metadata is inconsistent");
+  assert.strictEqual(state.totalPruneCount, 0, "FAIL - protected-tool skips should not affect pruning statistics");
 
   console.log("  PASS: automatic pruning protection honors canonical ToolRecord names");
   console.log("TEST 40 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 41 — SWEEP N TARGETS THE LAST N ELIGIBLE UNPROTECTED OUTPUTS
+// Test 41 - SWEEP N TARGETS THE LAST N ELIGIBLE UNPROTECTED OUTPUTS
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 41: /dcp sweep N skips protected tail entries and still finds the last N unprotected outputs");
@@ -3249,12 +3258,12 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.deepStrictEqual(
     [...state.prunedToolIds].sort(),
     ["toolu_read_1", "toolu_read_2"],
-    "FAIL — sweep 2 should prune the last two eligible unprotected outputs even when protected tools are at the tail",
+    "FAIL - sweep 2 should prune the last two eligible unprotected outputs even when protected tools are at the tail",
   );
-  assert.strictEqual(state.totalPruneCount, 2, "FAIL — sweep should count both newly pruned outputs");
+  assert.strictEqual(state.totalPruneCount, 2, "FAIL - sweep should count both newly pruned outputs");
   assert.ok(
     notifications[0]?.message.includes("Swept 2 tool outputs"),
-    "FAIL — expected sweep to report two pruned outputs",
+    "FAIL - expected sweep to report two pruned outputs",
   );
 
   console.log("  PASS: /dcp sweep N selects the last N eligible unprotected outputs");
@@ -3262,7 +3271,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 42 — GLOBAL PROTECTED TOOLS APPLY TO DEDUPLICATION
+// Test 42 - GLOBAL PROTECTED TOOLS APPLY TO DEDUPLICATION
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 42: config.compress.protectedTools prevents dedup pruning");
@@ -3323,15 +3332,15 @@ function findOrphanedToolUse(result: any[]): string | null {
 
   applyPruning(messages, state, config);
 
-  assert.deepStrictEqual([...state.prunedToolIds], [], "FAIL — globally protected tools should be excluded from dedup pruning");
-  assert.strictEqual(state.totalPruneCount, 0, "FAIL — globally protected-tool skips should not affect pruning statistics");
+  assert.deepStrictEqual([...state.prunedToolIds], [], "FAIL - globally protected tools should be excluded from dedup pruning");
+  assert.strictEqual(state.totalPruneCount, 0, "FAIL - globally protected-tool skips should not affect pruning statistics");
 
   console.log("  PASS: config.compress.protectedTools is honored by deduplication");
   console.log("TEST 42 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 43 — GLOBAL PROTECTED TOOLS APPLY TO ERROR PURGING
+// Test 43 - GLOBAL PROTECTED TOOLS APPLY TO ERROR PURGING
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 43: config.compress.protectedTools prevents error purging");
@@ -3375,15 +3384,15 @@ function findOrphanedToolUse(result: any[]): string | null {
 
   applyPruning(messages, state, config);
 
-  assert.deepStrictEqual([...state.prunedToolIds], [], "FAIL — globally protected tools should be excluded from error purging");
-  assert.strictEqual(state.totalPruneCount, 0, "FAIL — globally protected error-purge skips should not affect pruning statistics");
+  assert.deepStrictEqual([...state.prunedToolIds], [], "FAIL - globally protected tools should be excluded from error purging");
+  assert.strictEqual(state.totalPruneCount, 0, "FAIL - globally protected error-purge skips should not affect pruning statistics");
 
   console.log("  PASS: config.compress.protectedTools is honored by error purging");
   console.log("TEST 43 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 44 — MIXED RAW + BLOCK ROLL-UP SUCCEEDS
+// Test 44 - MIXED RAW + BLOCK ROLL-UP SUCCEEDS
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 44: a roll-up can include raw messages plus a fully contained active block");
@@ -3420,35 +3429,36 @@ function findOrphanedToolUse(result: any[]): string | null {
       {
         startId: "m001",
         endId: "m003",
-        summary: "Raw setup happened.\n\n(b1)\n\nRaw follow-up was resolved.",
+        summary: "Raw setup happened. Raw follow-up was resolved. Includes the b1 child range.",
+        supersedes: ["b1"],
       },
     ],
   });
 
   const parent = state.compressionBlocks.find((b) => b.id === 2);
-  assert.ok(parent?.active, "FAIL — expected the mixed roll-up parent to be active");
-  assert.deepStrictEqual(parent?.supersedesBlockIds, [1], "FAIL — expected the mixed roll-up parent to supersede b1");
-  assert.strictEqual(parent?.startTimestamp, 1000, "FAIL — expected the mixed roll-up to include the leading raw message");
-  assert.strictEqual(parent?.endTimestamp, 4000, "FAIL — expected the mixed roll-up to include the trailing raw message");
-  assert.strictEqual(parent?.anchorTimestamp, 5000, "FAIL — expected the mixed roll-up parent to anchor on the next visible raw message");
-  assert.ok(!parent?.summary.includes("Child summary."), "FAIL — expected mixed roll-up parent summary to avoid inlining the child summary");
-  assert.ok(!parent?.summary.includes("(b1)"), "FAIL — expected mixed roll-up placeholder to be removed before storage");
+  assert.ok(parent?.active, "FAIL - expected the mixed roll-up parent to be active");
+  assert.deepStrictEqual(parent?.supersedesBlockIds, [1], "FAIL - expected the mixed roll-up parent to supersede b1");
+  assert.strictEqual(parent?.startTimestamp, 1000, "FAIL - expected the mixed roll-up to include the leading raw message");
+  assert.strictEqual(parent?.endTimestamp, 4000, "FAIL - expected the mixed roll-up to include the trailing raw message");
+  assert.strictEqual(parent?.anchorTimestamp, 5000, "FAIL - expected the mixed roll-up parent to anchor on the next visible raw message");
+  assert.ok(!parent?.summary.includes("Child summary."), "FAIL - expected mixed roll-up parent summary to avoid inlining the child summary");
+  assert.ok(!parent?.summary.includes("(b1)"), "FAIL - expected mixed roll-up summary to not embed any bN placeholder token");
 
   const visible = applyPruning(messages, state, config);
   const visibleText = JSON.stringify(visible);
-  assert.ok(visibleText.includes("b2</dcp-block-id>"), "FAIL — expected the mixed roll-up parent to be visible");
-  assert.ok(!visibleText.includes("b1</dcp-block-id>"), "FAIL — expected the child block to be hidden after mixed roll-up");
+  assert.ok(visibleText.includes("b2</dcp-block-id>"), "FAIL - expected the mixed roll-up parent to be visible");
+  assert.ok(!visibleText.includes("b1</dcp-block-id>"), "FAIL - expected the child block to be hidden after mixed roll-up");
   for (const ts of [1000, 2000, 3000, 4000]) {
-    assert.ok(!visible.some((m: any) => m.timestamp === ts), `FAIL — ts=${ts} should be hidden under the mixed roll-up parent`);
+    assert.ok(!visible.some((m: any) => m.timestamp === ts), `FAIL - ts=${ts} should be hidden under the mixed roll-up parent`);
   }
-  assert.ok(visible.some((m: any) => m.timestamp === 5000), "FAIL — expected the tail raw message to remain visible");
+  assert.ok(visible.some((m: any) => m.timestamp === 5000), "FAIL - expected the tail raw message to remain visible");
 
   console.log("  PASS: mixed raw-plus-block roll-up creates a single parent block with the correct effective range");
   console.log("TEST 44 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 45 — TERMINAL ROLL-UP USES A FINITE FALLBACK ANCHOR
+// Test 45 - TERMINAL ROLL-UP USES A FINITE FALLBACK ANCHOR
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 45: a roll-up that reaches the end of visible context gets a finite fallback anchor");
@@ -3495,15 +3505,16 @@ function findOrphanedToolUse(result: any[]): string | null {
       {
         startId: "b1",
         endId: "b2",
-        summary: "Terminal parent.\n\n(b1)\n\nThen\n\n(b2)",
+        summary: "Terminal parent covering b1 and b2.",
+        supersedes: ["b1", "b2"],
       },
     ],
   });
 
   const parent = state.compressionBlocks.find((b) => b.id === 3);
-  assert.ok(parent?.active, "FAIL — expected the terminal roll-up parent to be active");
-  assert.ok(Number.isFinite(parent?.anchorTimestamp), "FAIL — expected the terminal roll-up anchor to be finite");
-  assert.notStrictEqual(JSON.parse(JSON.stringify(parent)).anchorTimestamp, null, "FAIL — expected the terminal roll-up anchor to survive JSON serialization");
+  assert.ok(parent?.active, "FAIL - expected the terminal roll-up parent to be active");
+  assert.ok(Number.isFinite(parent?.anchorTimestamp), "FAIL - expected the terminal roll-up anchor to be finite");
+  assert.notStrictEqual(JSON.parse(JSON.stringify(parent)).anchorTimestamp, null, "FAIL - expected the terminal roll-up anchor to survive JSON serialization");
 
   const visible = applyPruning(messages, state, config);
   const compressedSections = visible.filter(
@@ -3513,15 +3524,15 @@ function findOrphanedToolUse(result: any[]): string | null {
       typeof m.content[0]?.text === "string" &&
       m.content[0].text.startsWith("[Compressed section:"),
   );
-  assert.strictEqual(compressedSections.length, 1, "FAIL — expected only the terminal parent block to remain visible");
-  assert.ok(JSON.stringify(compressedSections[0]).includes("b3</dcp-block-id>"), "FAIL — expected the visible terminal parent block to be b3");
+  assert.strictEqual(compressedSections.length, 1, "FAIL - expected only the terminal parent block to remain visible");
+  assert.ok(JSON.stringify(compressedSections[0]).includes("b3</dcp-block-id>"), "FAIL - expected the visible terminal parent block to be b3");
 
   console.log("  PASS: terminal roll-ups use a finite fallback anchor and remain serializable");
   console.log("TEST 45 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 46 — BATCHED ROLL-UPS CAN SUCCEED TOGETHER
+// Test 46 - BATCHED ROLL-UPS CAN SUCCEED TOGETHER
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 46: multiple independent roll-up ranges can succeed in one batch");
@@ -3599,35 +3610,37 @@ function findOrphanedToolUse(result: any[]): string | null {
         {
           startId: "b1",
           endId: "b2",
-          summary: "First parent.\n\n(b1)\n\nThen\n\n(b2)",
+          summary: "First parent covering b1 and b2.",
+          supersedes: ["b1", "b2"],
         },
         {
           startId: "b3",
           endId: "b4",
-          summary: "Second parent.\n\n(b3)\n\nThen\n\n(b4)",
+          summary: "Second parent covering b3 and b4.",
+          supersedes: ["b3", "b4"],
         },
       ],
     },
   );
 
-  assert.deepStrictEqual(result.details.blockIds, [5, 6], "FAIL — expected two new parent block IDs from the batched roll-up");
-  assert.deepStrictEqual(result.details.supersededBlockIds, [1, 2, 3, 4], "FAIL — expected the batched roll-up result to report all superseded children");
-  assert.deepStrictEqual(state.compressionBlocks.find((b) => b.id === 5)?.supersedesBlockIds, [1, 2], "FAIL — expected b5 to supersede only the first pair");
-  assert.deepStrictEqual(state.compressionBlocks.find((b) => b.id === 6)?.supersedesBlockIds, [3, 4], "FAIL — expected b6 to supersede only the second pair");
+  assert.deepStrictEqual(result.details.blockIds, [5, 6], "FAIL - expected two new parent block IDs from the batched roll-up");
+  assert.deepStrictEqual(result.details.supersededBlockIds, [1, 2, 3, 4], "FAIL - expected the batched roll-up result to report all superseded children");
+  assert.deepStrictEqual(state.compressionBlocks.find((b) => b.id === 5)?.supersedesBlockIds, [1, 2], "FAIL - expected b5 to supersede only the first pair");
+  assert.deepStrictEqual(state.compressionBlocks.find((b) => b.id === 6)?.supersedesBlockIds, [3, 4], "FAIL - expected b6 to supersede only the second pair");
 
   const visible = applyPruning(messages, state, config);
   const visibleText = JSON.stringify(visible);
-  assert.ok(visibleText.includes("b5</dcp-block-id>"), "FAIL — expected b5 to be visible after batched roll-up");
-  assert.ok(visibleText.includes("b6</dcp-block-id>"), "FAIL — expected b6 to be visible after batched roll-up");
-  assert.ok(visibleText.includes("gap"), "FAIL — expected the uncompressed gap message to remain visible between batched roll-up parents");
-  assert.ok(!visibleText.includes("b1</dcp-block-id>") && !visibleText.includes("b2</dcp-block-id>") && !visibleText.includes("b3</dcp-block-id>") && !visibleText.includes("b4</dcp-block-id>"), "FAIL — expected all child blocks to be hidden after batched roll-up");
+  assert.ok(visibleText.includes("b5</dcp-block-id>"), "FAIL - expected b5 to be visible after batched roll-up");
+  assert.ok(visibleText.includes("b6</dcp-block-id>"), "FAIL - expected b6 to be visible after batched roll-up");
+  assert.ok(visibleText.includes("gap"), "FAIL - expected the uncompressed gap message to remain visible between batched roll-up parents");
+  assert.ok(!visibleText.includes("b1</dcp-block-id>") && !visibleText.includes("b2</dcp-block-id>") && !visibleText.includes("b3</dcp-block-id>") && !visibleText.includes("b4</dcp-block-id>"), "FAIL - expected all child blocks to be hidden after batched roll-up");
 
   console.log("  PASS: independent roll-up ranges can be validated and committed together");
   console.log("TEST 46 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 47 — MIN-RANGE VALIDATION COUNTS VISIBLE BLOCKS
+// Test 47 - MIN-RANGE VALIDATION COUNTS VISIBLE BLOCKS
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 47: minRangeMessages counts active compressed blocks as visible items");
@@ -3677,12 +3690,13 @@ function findOrphanedToolUse(result: any[]): string | null {
           {
             startId: "b1",
             endId: "b1",
-            summary: "Only child.\n\n(b1)",
+            summary: "Only one child block in range.",
+            supersedes: ["b1"],
           },
         ],
       }),
     /covers only 1 visible conversation item\(s\)/,
-    "FAIL — expected a single visible block to count as only one item for minRangeMessages",
+    "FAIL - expected a single visible block to count as only one item for minRangeMessages",
   );
 
   const result = await executeCompressTool(state, config, {
@@ -3691,22 +3705,23 @@ function findOrphanedToolUse(result: any[]): string | null {
       {
         startId: "b1",
         endId: "b2",
-        summary: "Both children.\n\n(b1)\n\nThen\n\n(b2)",
+        summary: "Both children rolled up together.",
+        supersedes: ["b1", "b2"],
       },
     ],
   });
 
-  assert.deepStrictEqual(result.details.blockIds, [3], "FAIL — expected the two-block visible range to satisfy minRangeMessages");
+  assert.deepStrictEqual(result.details.blockIds, [3], "FAIL - expected the two-block visible range to satisfy minRangeMessages");
 
   console.log("  PASS: minRangeMessages measures visible block ranges correctly");
   console.log("TEST 47 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 48 — PLACEHOLDERS MUST USE CANONICAL bN FORM
+// Test 48 - SUPERSEDES ENTRIES MUST USE CANONICAL bN FORM
 // ---------------------------------------------------------------------------
 {
-  console.log("TEST 48: roll-up placeholders require the canonical bN spelling");
+  console.log("TEST 48: roll-up supersedes entries require the canonical bN spelling");
 
   const messages: any[] = [
     { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
@@ -3734,25 +3749,26 @@ function findOrphanedToolUse(result: any[]): string | null {
   await assert.rejects(
     () =>
       executeCompressTool(state, config, {
-        topic: "bad placeholder spelling",
+        topic: "bad supersedes spelling",
         ranges: [
           {
             startId: "b1",
             endId: "b1",
-            summary: "Non-canonical placeholder.\n\n(b01)",
+            summary: "Roll-up of b1 with a non-canonical supersedes entry.",
+            supersedes: ["b01"],
           },
         ],
       }),
-    /Missing: b1\./,
-    "FAIL — expected (b01) not to satisfy the required canonical (b1) placeholder",
+    /invalid "supersedes" entry "b01".*canonical bN form/s,
+    "FAIL - expected b01 not to satisfy the required canonical b1 supersedes entry",
   );
 
-  console.log("  PASS: non-canonical placeholder spellings are rejected");
+  console.log("  PASS: non-canonical supersedes spellings are rejected");
   console.log("TEST 48 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 49 — CORRUPT ACTIVE BLOCKS DO NOT BLOCK NEW COMPRESSIONS
+// Test 49 - CORRUPT ACTIVE BLOCKS DO NOT BLOCK NEW COMPRESSIONS
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 49: corrupt active blocks are ignored during new compression overlap checks");
@@ -3792,15 +3808,15 @@ function findOrphanedToolUse(result: any[]): string | null {
     ],
   });
 
-  assert.deepStrictEqual(result.details.blockIds, [2], "FAIL — expected the new compression block to be created despite the corrupt active block");
-  assert.ok(state.compressionBlocks.find((b) => b.id === 2)?.active, "FAIL — expected the new compression block to be active");
+  assert.deepStrictEqual(result.details.blockIds, [2], "FAIL - expected the new compression block to be created despite the corrupt active block");
+  assert.ok(state.compressionBlocks.find((b) => b.id === 2)?.active, "FAIL - expected the new compression block to be active");
 
   console.log("  PASS: corrupt active blocks do not block valid new compressions");
   console.log("TEST 49 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 50 — ANCHORS RESPECT PASSTHROUGH MESSAGES
+// Test 50 - ANCHORS RESPECT PASSTHROUGH MESSAGES
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 50: compression anchors account for visible passthrough messages");
@@ -3827,22 +3843,22 @@ function findOrphanedToolUse(result: any[]): string | null {
   });
 
   const block = state.compressionBlocks.find((b) => b.id === 1);
-  assert.strictEqual(block?.anchorTimestamp, 1500, "FAIL — expected the anchor to target the passthrough message immediately after the range");
+  assert.strictEqual(block?.anchorTimestamp, 1500, "FAIL - expected the anchor to target the passthrough message immediately after the range");
 
   const visible = applyPruning(messages, state, config);
   const compressedIndex = visible.findIndex((m: any) => JSON.stringify(m).includes("b1</dcp-block-id>"));
   const passthroughIndex = visible.findIndex((m: any) => m.role === "branch_summary");
   const tailIndex = visible.findIndex((m: any) => m.timestamp === 2000);
-  assert.ok(compressedIndex !== -1, "FAIL — expected the compressed summary to remain visible");
-  assert.ok(passthroughIndex !== -1, "FAIL — expected the passthrough message to remain visible");
-  assert.ok(compressedIndex < passthroughIndex && passthroughIndex < tailIndex, "FAIL — expected the compressed summary to appear before the passthrough message and tail");
+  assert.ok(compressedIndex !== -1, "FAIL - expected the compressed summary to remain visible");
+  assert.ok(passthroughIndex !== -1, "FAIL - expected the passthrough message to remain visible");
+  assert.ok(compressedIndex < passthroughIndex && passthroughIndex < tailIndex, "FAIL - expected the compressed summary to appear before the passthrough message and tail");
 
   console.log("  PASS: compression anchors preserve chronology around passthrough messages");
   console.log("TEST 50 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 51 — EMPTY RANGE LISTS ARE REJECTED
+// Test 51 - EMPTY RANGE LISTS ARE REJECTED
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 51: empty compress requests are rejected");
@@ -3857,7 +3873,7 @@ function findOrphanedToolUse(result: any[]): string | null {
         ranges: [],
       }),
     /at least one range/,
-    "FAIL — expected empty compress requests to be rejected",
+    "FAIL - expected empty compress requests to be rejected",
   );
 
   console.log("  PASS: empty compress requests fail fast");
@@ -3865,196 +3881,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 52 — PLACEHOLDER-ONLY ROLL-UPS ARE REJECTED
-// ---------------------------------------------------------------------------
-{
-  console.log("TEST 52: placeholder-only roll-up summaries are rejected");
-
-  const messages: any[] = [
-    { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
-    { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
-    { role: "user", content: [{ type: "text", text: "c" }], timestamp: 3000 },
-    { role: "user", content: [{ type: "text", text: "d" }], timestamp: 4000 },
-  ];
-
-  const state = makeState([
-    {
-      id: 1,
-      topic: "first child",
-      summary: "First child summary.",
-      startTimestamp: 1000,
-      endTimestamp: 2000,
-      anchorTimestamp: 3000,
-      active: true,
-      summaryTokenEstimate: 5,
-      createdAt: Date.now(),
-    },
-    {
-      id: 2,
-      topic: "second child",
-      summary: "Second child summary.",
-      startTimestamp: 3000,
-      endTimestamp: 4000,
-      anchorTimestamp: 4001,
-      active: true,
-      summaryTokenEstimate: 5,
-      createdAt: Date.now(),
-    },
-  ]);
-  state.nextBlockId = 3;
-
-  const config = makeConfig();
-  applyPruning(messages, state, config);
-
-  await assert.rejects(
-    () =>
-      executeCompressTool(state, config, {
-        topic: "empty parent summary",
-        ranges: [
-          {
-            startId: "b1",
-            endId: "b2",
-            summary: "1. (b1)\n2. (b2)",
-          },
-        ],
-      }),
-    /must retain substantive summary text after block placeholders are removed/,
-    "FAIL — expected placeholder-only roll-up summaries to be rejected",
-  );
-
-  await assert.rejects(
-    () =>
-      executeCompressTool(state, config, {
-        topic: "markup-only parent summary",
-        ranges: [
-          {
-            startId: "b1",
-            endId: "b2",
-            summary: "<p>(b1)</p><p>(b2)</p>",
-          },
-        ],
-      }),
-    /must retain substantive summary text after block placeholders are removed/,
-    "FAIL — expected markup-only placeholder shells to be rejected",
-  );
-
-  assert.strictEqual(state.compressionBlocks.length, 2, "FAIL — rejected placeholder-only roll-up should not create a parent block");
-  assert.strictEqual(state.nextBlockId, 3, "FAIL — rejected placeholder-only roll-up should not advance nextBlockId");
-  for (const childId of [1, 2]) {
-    const child = state.compressionBlocks.find((b) => b.id === childId);
-    assert.strictEqual(child?.active, true, `FAIL — child b${childId} should remain active`);
-    assert.strictEqual(child?.supersededByBlockId, undefined, `FAIL — child b${childId} should not be superseded`);
-    assert.strictEqual(child?.supersededAt, undefined, `FAIL — child b${childId} should not record supersededAt`);
-  }
-
-  console.log("  PASS: placeholder-only roll-up summaries are rejected before child blocks are superseded");
-  console.log("TEST 52 PASSED\n");
-}
-
-// ---------------------------------------------------------------------------
-// Test 53 — BATCHED SUBSTANTIVE-SUMMARY FAILURES ARE ATOMIC
-// ---------------------------------------------------------------------------
-{
-  console.log("TEST 53: batched roll-up rejection remains atomic when a parent summary becomes non-substantive");
-
-  const messages: any[] = [
-    { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
-    { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
-    { role: "user", content: [{ type: "text", text: "c" }], timestamp: 3000 },
-    { role: "user", content: [{ type: "text", text: "d" }], timestamp: 4000 },
-    { role: "user", content: [{ type: "text", text: "e" }], timestamp: 5000 },
-    { role: "user", content: [{ type: "text", text: "f" }], timestamp: 6000 },
-    { role: "user", content: [{ type: "text", text: "g" }], timestamp: 7000 },
-    { role: "user", content: [{ type: "text", text: "h" }], timestamp: 8000 },
-  ];
-
-  const state = makeState([
-    {
-      id: 1,
-      topic: "first pair a",
-      summary: "First pair a summary.",
-      startTimestamp: 1000,
-      endTimestamp: 2000,
-      anchorTimestamp: 3000,
-      active: true,
-      summaryTokenEstimate: 5,
-      createdAt: Date.now(),
-    },
-    {
-      id: 2,
-      topic: "first pair b",
-      summary: "First pair b summary.",
-      startTimestamp: 3000,
-      endTimestamp: 4000,
-      anchorTimestamp: 5000,
-      active: true,
-      summaryTokenEstimate: 5,
-      createdAt: Date.now(),
-    },
-    {
-      id: 3,
-      topic: "second pair a",
-      summary: "Second pair a summary.",
-      startTimestamp: 5000,
-      endTimestamp: 6000,
-      anchorTimestamp: 7000,
-      active: true,
-      summaryTokenEstimate: 5,
-      createdAt: Date.now(),
-    },
-    {
-      id: 4,
-      topic: "second pair b",
-      summary: "Second pair b summary.",
-      startTimestamp: 7000,
-      endTimestamp: 8000,
-      anchorTimestamp: 8001,
-      active: true,
-      summaryTokenEstimate: 5,
-      createdAt: Date.now(),
-    },
-  ]);
-  state.nextBlockId = 5;
-
-  const config = makeConfig();
-  applyPruning(messages, state, config);
-
-  await assert.rejects(
-    () =>
-      executeCompressTool(state, config, {
-        topic: "mixed substantive batch",
-        ranges: [
-          {
-            startId: "b1",
-            endId: "b2",
-            summary: "Valid parent text.\n\n(b1)\n\nThen\n\n(b2)",
-          },
-          {
-            startId: "b3",
-            endId: "b4",
-            summary: "1. (b3)\n2. (b4)",
-          },
-        ],
-      }),
-    /must retain substantive summary text after block placeholders are removed/,
-    "FAIL — expected batched substantive-summary validation to reject the whole request",
-  );
-
-  assert.strictEqual(state.compressionBlocks.length, 4, "FAIL — rejected batched roll-up should not create parent blocks");
-  assert.strictEqual(state.nextBlockId, 5, "FAIL — rejected batched roll-up should not advance nextBlockId");
-  for (const childId of [1, 2, 3, 4]) {
-    const child = state.compressionBlocks.find((b) => b.id === childId);
-    assert.strictEqual(child?.active, true, `FAIL — child b${childId} should remain active after batch rejection`);
-    assert.strictEqual(child?.supersededByBlockId, undefined, `FAIL — child b${childId} should not be superseded after batch rejection`);
-    assert.strictEqual(child?.supersededAt, undefined, `FAIL — child b${childId} should not record supersededAt after batch rejection`);
-  }
-
-  console.log("  PASS: substantive-summary validation failures remain atomic across batched roll-ups");
-  console.log("TEST 53 PASSED\n");
-}
-
-// ---------------------------------------------------------------------------
-// Test 54 — ROLL-UP TOKEN SAVINGS REPLACE CHILD SAVINGS
+// Test 54 - ROLL-UP TOKEN SAVINGS REPLACE CHILD SAVINGS
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 54: roll-up token accounting reflects the active parent rather than child-plus-parent totals");
@@ -4103,7 +3930,8 @@ function findOrphanedToolUse(result: any[]): string | null {
       {
         startId: "b1",
         endId: "b2",
-        summary: "Merged parent summary covering both child ranges.\n\n(b1)\n\nThen\n\n(b2)",
+        summary: "Merged parent summary covering both child ranges.",
+        supersedes: ["b1", "b2"],
       },
     ],
   });
@@ -4111,12 +3939,12 @@ function findOrphanedToolUse(result: any[]): string | null {
   assert.notStrictEqual(
     state.tokensSaved,
     childSavings,
-    "FAIL — compress execution should stop reporting superseded child savings immediately",
+    "FAIL - compress execution should stop reporting superseded child savings immediately",
   );
   assert.strictEqual(
     state.tokensSaved,
     0,
-    "FAIL — before the parent is applied, token savings should not include inactive child blocks",
+    "FAIL - before the parent is applied, token savings should not include inactive child blocks",
   );
 
   applyPruning(messages, state, config);
@@ -4127,11 +3955,11 @@ function findOrphanedToolUse(result: any[]): string | null {
     statsNotifications[0]?.message.includes(
       `Compression tokens saved (estimated): ${rolledUpSavings.toLocaleString()}`,
     ),
-    "FAIL — /dcp stats should report active parent-only token savings",
+    "FAIL - /dcp stats should report active parent-only token savings",
   );
   assert.ok(
     statsNotifications[0]?.message.includes("Compression blocks active: 1 / 3 total"),
-    "FAIL — /dcp stats should report only the roll-up parent as active",
+    "FAIL - /dcp stats should report only the roll-up parent as active",
   );
 
   const contextNotifications = await executeDcpCommand(
@@ -4145,14 +3973,14 @@ function findOrphanedToolUse(result: any[]): string | null {
     contextNotifications[0]?.message.includes(
       `Compression tokens saved (estimated): ${rolledUpSavings.toLocaleString()}`,
     ),
-    "FAIL — /dcp context should report active parent-only token savings",
+    "FAIL - /dcp context should report active parent-only token savings",
   );
   assert.ok(
     contextNotifications[0]?.message.includes("Compression blocks: 1"),
-    "FAIL — /dcp context should report only active compression blocks",
+    "FAIL - /dcp context should report only active compression blocks",
   );
   const parent = state.compressionBlocks.find((block) => block.id === 3);
-  assert.ok(parent?.active, "FAIL — expected the roll-up parent to be active");
+  assert.ok(parent?.active, "FAIL - expected the roll-up parent to be active");
 
   const expectedState = makeState([
     {
@@ -4165,23 +3993,23 @@ function findOrphanedToolUse(result: any[]): string | null {
   ]);
   applyPruning(messages, expectedState, config);
 
-  assert.ok(childSavings > 0, "FAIL — expected child blocks to contribute token savings before roll-up");
+  assert.ok(childSavings > 0, "FAIL - expected child blocks to contribute token savings before roll-up");
   assert.strictEqual(
     rolledUpSavings,
     expectedState.tokensSaved,
-    "FAIL — roll-up should report only the active parent block's savings",
+    "FAIL - roll-up should report only the active parent block's savings",
   );
   assert.notStrictEqual(
     rolledUpSavings,
     childSavings + expectedState.tokensSaved,
-    "FAIL — roll-up savings should not double-count superseded child blocks",
+    "FAIL - roll-up savings should not double-count superseded child blocks",
   );
 
   applyPruning(messages, state, config);
   assert.strictEqual(
     state.tokensSaved,
     rolledUpSavings,
-    "FAIL — repeated pruning after roll-up should not change token savings",
+    "FAIL - repeated pruning after roll-up should not change token savings",
   );
 
   console.log("  PASS: roll-up token savings reflect only the active parent block");
@@ -4189,214 +4017,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 55 — WRAPPED PLACEHOLDERS ARE REJECTED
-// ---------------------------------------------------------------------------
-{
-  console.log("TEST 55: roll-up placeholders must be submitted as bare tokens");
-
-  const messages: any[] = [
-    { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
-    { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
-  ];
-
-  const state = makeState([
-    {
-      id: 1,
-      topic: "only child",
-      summary: "Only child summary.",
-      startTimestamp: 1000,
-      endTimestamp: 2000,
-      anchorTimestamp: 2001,
-      active: true,
-      summaryTokenEstimate: 5,
-      createdAt: Date.now(),
-    },
-  ]);
-  state.nextBlockId = 2;
-
-  const config = makeConfig();
-  applyPruning(messages, state, config);
-
-  await assert.rejects(
-    () =>
-      executeCompressTool(state, config, {
-        topic: "wrapped placeholder",
-        ranges: [
-          {
-            startId: "b1",
-            endId: "b1",
-            summary: "Substantive parent summary.\n\n`(b1)`",
-          },
-        ],
-      }),
-    /bare \(bN\) placeholders|Do not wrap block placeholders/i,
-    "FAIL — expected wrapped block placeholders to be rejected directly",
-  );
-
-  await assert.rejects(
-    () =>
-      executeCompressTool(state, config, {
-        topic: "inline text placeholder",
-        ranges: [
-          {
-            startId: "b1",
-            endId: "b1",
-            summary: "Substantive parent summary.\n\n`see child (b1)`",
-          },
-        ],
-      }),
-    /bare \(bN\) placeholders|Do not wrap block placeholders/i,
-    "FAIL — expected placeholders inside inline code spans with surrounding text to be rejected",
-  );
-
-  await assert.rejects(
-    () =>
-      executeCompressTool(state, config, {
-        topic: "multiline backtick placeholder",
-        ranges: [
-          {
-            startId: "b1",
-            endId: "b1",
-            summary: "Substantive parent summary.\n\n`\n(b1)\n`",
-          },
-        ],
-      }),
-    /bare \(bN\) placeholders|Do not wrap block placeholders/i,
-    "FAIL — expected multiline backtick-wrapped placeholders to be rejected",
-  );
-
-  await assert.rejects(
-    () =>
-      executeCompressTool(state, config, {
-        topic: "fenced placeholder",
-        ranges: [
-          {
-            startId: "b1",
-            endId: "b1",
-            summary: "Substantive parent summary.\n\n```\n(b1)\n```",
-          },
-        ],
-      }),
-    /bare \(bN\) placeholders|Do not wrap block placeholders/i,
-    "FAIL — expected fenced block placeholders to be rejected directly",
-  );
-
-  await assert.rejects(
-    () =>
-      executeCompressTool(state, config, {
-        topic: "tilde fenced placeholder",
-        ranges: [
-          {
-            startId: "b1",
-            endId: "b1",
-            summary: "Substantive parent summary.\n\n~~~\n(b1)\n~~~",
-          },
-        ],
-      }),
-    /bare \(bN\) placeholders|Do not wrap block placeholders/i,
-    "FAIL — expected tilde-fenced placeholders to be rejected",
-  );
-
-  await assert.rejects(
-    () =>
-      executeCompressTool(state, config, {
-        topic: "indented placeholder",
-        ranges: [
-          {
-            startId: "b1",
-            endId: "b1",
-            summary: "Substantive parent summary.\n\n    (b1)",
-          },
-        ],
-      }),
-    /bare \(bN\) placeholders|Do not wrap block placeholders/i,
-    "FAIL — expected indented-code placeholders to be rejected",
-  );
-
-  assert.strictEqual(state.compressionBlocks.length, 1, "FAIL — wrapped placeholder rejection should not create a parent block");
-  assert.strictEqual(state.compressionBlocks[0]?.active, true, "FAIL — wrapped placeholder rejection should leave the child block active");
-
-  console.log("  PASS: wrapped roll-up placeholders are rejected");
-  console.log("TEST 55 PASSED\n");
-}
-
-// ---------------------------------------------------------------------------
-// Test 56 — WRAPPED-PLACEHOLDER BATCH REJECTION IS ATOMIC
-// ---------------------------------------------------------------------------
-{
-  console.log("TEST 56: wrapped-placeholder rejection remains atomic across batched roll-ups");
-
-  const messages: any[] = [
-    { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
-    { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
-    { role: "user", content: [{ type: "text", text: "c" }], timestamp: 3000 },
-    { role: "user", content: [{ type: "text", text: "d" }], timestamp: 4000 },
-  ];
-
-  const state = makeState([
-    {
-      id: 1,
-      topic: "first child",
-      summary: "First child summary.",
-      startTimestamp: 1000,
-      endTimestamp: 2000,
-      anchorTimestamp: 3000,
-      active: true,
-      summaryTokenEstimate: 5,
-      createdAt: Date.now(),
-    },
-    {
-      id: 2,
-      topic: "second child",
-      summary: "Second child summary.",
-      startTimestamp: 3000,
-      endTimestamp: 4000,
-      anchorTimestamp: 4001,
-      active: true,
-      summaryTokenEstimate: 5,
-      createdAt: Date.now(),
-    },
-  ]);
-  state.nextBlockId = 3;
-
-  const config = makeConfig();
-  applyPruning(messages, state, config);
-
-  await assert.rejects(
-    () =>
-      executeCompressTool(state, config, {
-        topic: "wrapped placeholder batch",
-        ranges: [
-          {
-            startId: "b1",
-            endId: "b1",
-            summary: "Valid parent text.\n\n(b1)",
-          },
-          {
-            startId: "b2",
-            endId: "b2",
-            summary: "Second parent text.\n\n`(b2)`",
-          },
-        ],
-      }),
-    /bare \(bN\) placeholders|Do not wrap block placeholders/i,
-    "FAIL — expected wrapped-placeholder validation to reject the whole batch",
-  );
-
-  assert.strictEqual(state.compressionBlocks.length, 2, "FAIL — rejected wrapped-placeholder batch should not create parent blocks");
-  assert.strictEqual(state.nextBlockId, 3, "FAIL — rejected wrapped-placeholder batch should not advance nextBlockId");
-  for (const childId of [1, 2]) {
-    const child = state.compressionBlocks.find((b) => b.id === childId);
-    assert.strictEqual(child?.active, true, `FAIL — child b${childId} should remain active after batch rejection`);
-    assert.strictEqual(child?.supersededByBlockId, undefined, `FAIL — child b${childId} should not be superseded after batch rejection`);
-  }
-
-  console.log("  PASS: wrapped-placeholder validation remains atomic across batched roll-ups");
-  console.log("TEST 56 PASSED\n");
-}
-
-// ---------------------------------------------------------------------------
-// Test 57 — RAW COMPRESSIONS DO NOT REQUIRE ROLL-UP PARENT PROSE
+// Test 57 - RAW COMPRESSIONS DO NOT REQUIRE ROLL-UP PARENT PROSE
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 57: terse raw compression summaries remain valid when no child blocks are being rolled up");
@@ -4421,15 +4042,15 @@ function findOrphanedToolUse(result: any[]): string | null {
     ],
   });
 
-  assert.deepStrictEqual(result.details.blockIds, [1], "FAIL — expected terse raw summaries without placeholders to remain valid");
-  assert.strictEqual(state.compressionBlocks[0]?.summary, "OK", "FAIL — expected the terse raw summary to be stored unchanged");
+  assert.deepStrictEqual(result.details.blockIds, [1], "FAIL - expected terse raw summaries without placeholders to remain valid");
+  assert.strictEqual(state.compressionBlocks[0]?.summary, "OK", "FAIL - expected the terse raw summary to be stored unchanged");
 
   console.log("  PASS: terse raw compression summaries remain valid");
   console.log("TEST 57 PASSED\n");
 }
 
 // ---------------------------------------------------------------------------
-// Test 58 — MIN-RANGE COUNTS ALL PASSTHROUGH VISIBLE MESSAGES
+// Test 58 - MIN-RANGE COUNTS ALL PASSTHROUGH VISIBLE MESSAGES
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 58: minRangeMessages counts all passthrough roles as visible items");
@@ -4460,7 +4081,7 @@ function findOrphanedToolUse(result: any[]): string | null {
     assert.deepStrictEqual(
       result.details.blockIds,
       [1],
-      `FAIL — ${passthroughRole} should count as a visible passthrough item`,
+      `FAIL - ${passthroughRole} should count as a visible passthrough item`,
     );
   }
 
@@ -4469,7 +4090,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 59 — PASSTHROUGH MIN-RANGE COUNTING STAYS BOUNDED
+// Test 59 - PASSTHROUGH MIN-RANGE COUNTING STAYS BOUNDED
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 59: minRangeMessages ignores passthrough messages outside the selected visible range");
@@ -4501,7 +4122,7 @@ function findOrphanedToolUse(result: any[]): string | null {
           ],
         }),
       /covers only 3 visible conversation item\(s\).*requires at least 4/s,
-      `FAIL — expected ${passthroughRole} counting to stay bounded to the selected visible range`,
+      `FAIL - expected ${passthroughRole} counting to stay bounded to the selected visible range`,
     );
   }
 
@@ -4510,7 +4131,7 @@ function findOrphanedToolUse(result: any[]): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Test 60 — ROLL-UP PROMPTS PRESERVE SEMANTIC GUIDANCE
+// Test 60 - ROLL-UP PROMPTS PRESERVE SEMANTIC GUIDANCE
 // ---------------------------------------------------------------------------
 {
   console.log("TEST 60: roll-up prompt text preserves core semantics");
@@ -4518,12 +4139,12 @@ function findOrphanedToolUse(result: any[]): string | null {
   assertIncludesAll(
     COMPRESS_RANGE_DESCRIPTION,
     [
-      "coverage marker for a contained child block",
-      "removes the placeholders",
-      "substantive authored text",
-      "marks the child blocks inactive/superseded",
-      "Future context injects only the new parent block",
-      "include every required block placeholder exactly once",
+      "`supersedes`",
+      "list each contained block exactly once",
+      "canonical `bN` ids",
+      "marked inactive/superseded",
+      "future context injects only the new parent block",
+      "the call is a roll-up",
     ],
     "compress tool description",
   );
@@ -4540,11 +4161,10 @@ function findOrphanedToolUse(result: any[]): string | null {
   assertIncludesAll(
     MANUAL_MODE_SYSTEM_PROMPT,
     [
-      "coverage markers for contained child blocks",
-      "remove those placeholders before storage",
-      "substantive authored text",
-      "supersede the child blocks",
-      "show only the parent block",
+      "per-range `supersedes` array",
+      "list each contained block exactly once",
+      "supersedes the listed child blocks",
+      "only the new parent block",
     ],
     "manual mode prompt",
   );
@@ -4555,15 +4175,412 @@ function findOrphanedToolUse(result: any[]): string | null {
     ["turn nudge", TURN_NUDGE],
     ["iteration nudge", ITERATION_NUDGE],
   ] as const) {
-    assert.ok(text.includes("roll-up"), `FAIL — ${label} should mention roll-up`);
+    assert.ok(text.includes("roll-up"), `FAIL - ${label} should mention roll-up`);
     assert.ok(
-      /child blocks|parent block|active parent|placeholders are removed before storage|newly synthesized parent summary/.test(text),
-      `FAIL — ${label} should describe parent/child roll-up semantics`,
+      /child blocks|parent block|active parent|supersedes|newly synthesized parent summary/.test(text),
+      `FAIL - ${label} should describe parent/child roll-up semantics`,
     );
   }
 
   console.log("  PASS: prompt and nudge text preserve roll-up semantics");
   console.log("TEST 60 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 61 - INVALID CANONICAL bN SPELLINGS ARE ALL REJECTED
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 61: canonical bN parsing rejects every malformed spelling");
+
+  const invalidEntries = ["b0", "b01", " b1", "b1 ", "b 1", "B1", "", "b", "b1.0", "b-1"];
+
+  for (const entry of invalidEntries) {
+    const messages: any[] = [
+      { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
+      { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
+    ];
+
+    const state = makeState([
+      {
+        id: 1,
+        topic: "only child",
+        summary: "Only child summary.",
+        startTimestamp: 1000,
+        endTimestamp: 2000,
+        anchorTimestamp: 2001,
+        active: true,
+        summaryTokenEstimate: 5,
+        createdAt: Date.now(),
+      },
+    ]);
+    state.nextBlockId = 2;
+
+    const config = makeConfig();
+    applyPruning(messages, state, config);
+
+    await assert.rejects(
+      () =>
+        executeCompressTool(state, config, {
+          topic: "bad supersedes spelling",
+          ranges: [
+            {
+              startId: "b1",
+              endId: "b1",
+              summary: "Roll-up of b1 with invalid supersedes entry.",
+              supersedes: [entry],
+            },
+          ],
+        }),
+      /invalid "supersedes" entry.*canonical bN form/s,
+      `FAIL - expected supersedes entry ${JSON.stringify(entry)} to be rejected as non-canonical`,
+    );
+  }
+
+  console.log("  PASS: malformed canonical bN spellings are all rejected");
+  console.log("TEST 61 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 62 - ROLL-UP WITH OMITTED SUPERSEDES IS REJECTED
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 62: roll-up range without an explicit supersedes array is rejected");
+
+  const messages: any[] = [
+    { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
+    { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
+    { role: "user", content: [{ type: "text", text: "c" }], timestamp: 3000 },
+    { role: "user", content: [{ type: "text", text: "d" }], timestamp: 4000 },
+  ];
+
+  const state = makeState([
+    {
+      id: 1,
+      topic: "child one",
+      summary: "Child one summary.",
+      startTimestamp: 1000,
+      endTimestamp: 2000,
+      anchorTimestamp: 2001,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+    {
+      id: 2,
+      topic: "child two",
+      summary: "Child two summary.",
+      startTimestamp: 3000,
+      endTimestamp: 4000,
+      anchorTimestamp: 4001,
+      active: true,
+      summaryTokenEstimate: 5,
+      createdAt: Date.now(),
+    },
+  ]);
+  state.nextBlockId = 3;
+
+  const config = makeConfig();
+  applyPruning(messages, state, config);
+
+  await assert.rejects(
+    () =>
+      executeCompressTool(state, config, {
+        topic: "missing supersedes",
+        ranges: [
+          {
+            startId: "b1",
+            endId: "b2",
+            summary: "Parent summary that forgot to declare supersedes.",
+          },
+        ],
+      }),
+    /fully contains active block\(s\) b1, b2\..*Pass "supersedes": \["b1", "b2"\]/s,
+    "FAIL - expected roll-up without supersedes to be rejected with a guiding error",
+  );
+
+  console.log("  PASS: omitted supersedes on a roll-up range is rejected explicitly");
+  console.log("TEST 62 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 63 - EMPTY supersedes ARRAY BEHAVIOR
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 63: empty supersedes is accepted for non-roll-ups and rejected for roll-ups");
+
+  // 63a: non-roll-up range with supersedes: [] succeeds (no contained blocks)
+  {
+    const messages: any[] = [
+      { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
+      { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
+      { role: "user", content: [{ type: "text", text: "c" }], timestamp: 3000 },
+    ];
+
+    const state = makeState();
+    const config = makeConfig();
+    applyPruning(messages, state, config);
+
+    const result = await executeCompressTool(state, config, {
+      topic: "non-roll-up empty supersedes",
+      ranges: [
+        {
+          startId: "m001",
+          endId: "m003",
+          summary: "Plain raw compression with an explicit empty supersedes.",
+          supersedes: [],
+        },
+      ],
+    });
+
+    assert.ok(result, "FAIL - expected non-roll-up with empty supersedes to succeed");
+    assert.strictEqual(state.compressionBlocks.length, 1, "FAIL - expected one block created");
+    assert.strictEqual(state.compressionBlocks[0]!.active, true, "FAIL - new block should be active");
+    assert.strictEqual(
+      state.compressionBlocks[0]!.supersedesBlockIds,
+      undefined,
+      "FAIL - non-roll-up block should not record any superseded children",
+    );
+  }
+
+  // 63b: roll-up range with supersedes: [] is rejected (missing all children)
+  {
+    const messages: any[] = [
+      { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
+      { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
+      { role: "user", content: [{ type: "text", text: "c" }], timestamp: 3000 },
+      { role: "user", content: [{ type: "text", text: "d" }], timestamp: 4000 },
+    ];
+
+    const state = makeState([
+      {
+        id: 1,
+        topic: "child one",
+        summary: "Child one summary.",
+        startTimestamp: 1000,
+        endTimestamp: 2000,
+        anchorTimestamp: 2001,
+        active: true,
+        summaryTokenEstimate: 5,
+        createdAt: Date.now(),
+      },
+      {
+        id: 2,
+        topic: "child two",
+        summary: "Child two summary.",
+        startTimestamp: 3000,
+        endTimestamp: 4000,
+        anchorTimestamp: 4001,
+        active: true,
+        summaryTokenEstimate: 5,
+        createdAt: Date.now(),
+      },
+    ]);
+    state.nextBlockId = 3;
+
+    const config = makeConfig();
+    applyPruning(messages, state, config);
+
+    await assert.rejects(
+      () =>
+        executeCompressTool(state, config, {
+          topic: "roll-up empty supersedes",
+          ranges: [
+            {
+              startId: "b1",
+              endId: "b2",
+              summary: "Roll-up parent with an empty supersedes array.",
+              supersedes: [],
+            },
+          ],
+        }),
+      /Missing: b1, b2\./s,
+      "FAIL - expected roll-up with empty supersedes to surface every missing child id",
+    );
+  }
+
+  console.log("  PASS: empty supersedes is allowed only when no active children are contained");
+  console.log("TEST 63 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 64 - UNKNOWN AND INACTIVE supersedes REFERENCES ARE REJECTED
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 64: supersedes referencing unknown or inactive blocks is rejected");
+
+  // 64a: unknown bN (never existed) on a non-roll-up range is unexpected.
+  {
+    const messages: any[] = [
+      { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
+      { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
+      { role: "user", content: [{ type: "text", text: "c" }], timestamp: 3000 },
+    ];
+
+    const state = makeState();
+    const config = makeConfig();
+    applyPruning(messages, state, config);
+
+    await assert.rejects(
+      () =>
+        executeCompressTool(state, config, {
+          topic: "unknown supersedes",
+          ranges: [
+            {
+              startId: "m001",
+              endId: "m003",
+              summary: "Non-roll-up range falsely listing an unknown child.",
+              supersedes: ["b999"],
+            },
+          ],
+        }),
+      /does not fully contain any active compression blocks.*supersedes.*must be omitted or empty.*Unexpected entries: b999\./s,
+      "FAIL - expected unknown bN reference on a non-roll-up range to be rejected as unexpected",
+    );
+  }
+
+  // 64b: inactive (already superseded) child cannot be re-listed in supersedes.
+  // The block exists in state but is inactive, so it is not contained in the active range.
+  {
+    const messages: any[] = [
+      { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
+      { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
+      { role: "user", content: [{ type: "text", text: "c" }], timestamp: 3000 },
+    ];
+
+    const state = makeState([
+      {
+        id: 1,
+        topic: "inactive child",
+        summary: "Already superseded child summary.",
+        startTimestamp: 1000,
+        endTimestamp: 2000,
+        anchorTimestamp: 2001,
+        active: false,
+        summaryTokenEstimate: 5,
+        createdAt: Date.now(),
+      },
+    ]);
+    state.nextBlockId = 2;
+
+    const config = makeConfig();
+    applyPruning(messages, state, config);
+
+    await assert.rejects(
+      () =>
+        executeCompressTool(state, config, {
+          topic: "inactive supersedes",
+          ranges: [
+            {
+              startId: "m001",
+              endId: "m003",
+              summary: "Non-roll-up range listing an inactive child as superseded.",
+              supersedes: ["b1"],
+            },
+          ],
+        }),
+      /does not fully contain any active compression blocks.*Unexpected entries: b1\./s,
+      "FAIL - expected inactive child reference to be rejected as unexpected",
+    );
+  }
+
+  console.log("  PASS: unknown and inactive supersedes references are rejected");
+  console.log("TEST 64 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 65 - NON-ARRAY supersedes IS REJECTED WITH A DOMAIN ERROR
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 65: a malformed (non-array) supersedes value surfaces a domain error");
+
+  const messages: any[] = [
+    { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
+    { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
+    { role: "user", content: [{ type: "text", text: "c" }], timestamp: 3000 },
+  ];
+
+  const state = makeState();
+  const config = makeConfig();
+  applyPruning(messages, state, config);
+
+  await assert.rejects(
+    () =>
+      executeCompressTool(state, config, {
+        topic: "malformed supersedes",
+        ranges: [
+          {
+            startId: "m001",
+            endId: "m003",
+            summary: "Compression range with a non-array supersedes value.",
+            supersedes: "b1" as unknown as string[],
+          },
+        ],
+      }),
+    /invalid "supersedes" field: expected an array of bN strings, got string\./,
+    "FAIL - expected non-array supersedes value to be rejected with a domain error",
+  );
+
+  console.log("  PASS: non-array supersedes values produce a clear domain error");
+  console.log("TEST 65 PASSED\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 66 - NON-STRING supersedes ENTRIES ARE REJECTED
+// ---------------------------------------------------------------------------
+{
+  console.log("TEST 66: malformed (non-string) supersedes entries are rejected with a typed error");
+
+  const malformedEntries = [
+    { entry: 1, expectedType: "number" },
+    { entry: null, expectedType: "object" },
+    { entry: true, expectedType: "boolean" },
+    { entry: {}, expectedType: "object" },
+  ] as const;
+
+  for (const { entry, expectedType } of malformedEntries) {
+    const messages: any[] = [
+      { role: "user", content: [{ type: "text", text: "a" }], timestamp: 1000 },
+      { role: "user", content: [{ type: "text", text: "b" }], timestamp: 2000 },
+    ];
+
+    const state = makeState([
+      {
+        id: 1,
+        topic: "only child",
+        summary: "Only child summary.",
+        startTimestamp: 1000,
+        endTimestamp: 2000,
+        anchorTimestamp: 2001,
+        active: true,
+        summaryTokenEstimate: 5,
+        createdAt: Date.now(),
+      },
+    ]);
+    state.nextBlockId = 2;
+
+    const config = makeConfig();
+    applyPruning(messages, state, config);
+
+    await assert.rejects(
+      () =>
+        executeCompressTool(state, config, {
+          topic: "bad supersedes element type",
+          ranges: [
+            {
+              startId: "b1",
+              endId: "b1",
+              summary: "Roll-up of b1 with malformed supersedes entry.",
+              supersedes: [entry] as unknown as string[],
+            },
+          ],
+        }),
+      new RegExp(`invalid "supersedes" entry: expected a string like "b3", got ${expectedType}\\.`),
+      `FAIL - expected supersedes entry ${JSON.stringify(entry)} to be rejected as non-string`,
+    );
+  }
+
+  console.log("  PASS: non-string supersedes entries are rejected with a typed error");
+  console.log("TEST 66 PASSED\n");
 }
 
 console.log("All tests passed.");

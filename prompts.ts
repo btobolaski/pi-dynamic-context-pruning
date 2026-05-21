@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Dynamic Context Pruning (DCP) — PI extension prompts
+// Dynamic Context Pruning (DCP) - PI extension prompts
 // ---------------------------------------------------------------------------
 // All prompt text is exported as plain strings so the extension index can
 // reference them by name without executing any logic here.
@@ -16,7 +16,7 @@ The ONLY tool you have for context management is \`compress\`. It replaces older
 \`<dcp-id>\`, \`<dcp-block-id>\`, and \`<dcp-system-reminder>\` tags are environment-injected metadata. Do not output them.
 
 THE PHILOSOPHY OF COMPRESS
-\`compress\` transforms conversation content into dense, high-fidelity summaries. This is not cleanup — it is crystallization. Your summary becomes the authoritative record of what transpired.
+\`compress\` transforms conversation content into dense, high-fidelity summaries. This is not cleanup; it is crystallization. Your summary becomes the authoritative record of what transpired.
 
 Think of compression as phase transitions: raw exploration becomes refined understanding. The original context served its purpose; your summary now carries that understanding forward.
 
@@ -63,60 +63,45 @@ It is your responsibility to keep a sharp, high-quality context window for optim
  *   {
  *     topic:  string           // 3-5 word label for this compression
  *     ranges: Array<{
- *       startId: string        // mNNN or bN
- *       endId:   string        // mNNN or bN
- *       summary: string        // exhaustive technical summary
+ *       startId:     string         // mNNN or bN
+ *       endId:       string         // mNNN or bN
+ *       summary:     string         // exhaustive technical summary
+ *       supersedes?: string[]       // bN ids of active blocks fully contained in this range (roll-up only)
  *     }>
  *   }
  */
 export const COMPRESS_RANGE_DESCRIPTION = `Collapse one or more ranges of the conversation into detailed summaries.
 
 THE SUMMARY
-Your summary must be EXHAUSTIVE. Capture file paths, function signatures, decisions made, constraints discovered, key findings... EVERYTHING that maintains context integrity. This is not a brief note — it is an authoritative record so faithful that the original conversation adds no value.
+Your summary must be EXHAUSTIVE. Capture file paths, function signatures, decisions made, constraints discovered, key findings... EVERYTHING that maintains context integrity. This is not a brief note; it is an authoritative record so faithful that the original conversation adds no value.
 
 USER INTENT FIDELITY
 When the compressed range includes user messages, preserve the user's intent with extra care. Do not change scope, constraints, priorities, acceptance criteria, or requested outcomes.
 Directly quote user messages when they are short enough to include safely. Direct quotes are preferred when they best preserve exact meaning.
 
-Yet be LEAN. Strip away the noise: failed attempts that led nowhere, verbose tool outputs, back-and-forth exploration. What remains should be pure signal — golden nuggets of detail that preserve full understanding with zero ambiguity.
+Yet be LEAN. Strip away the noise: failed attempts that led nowhere, verbose tool outputs, back-and-forth exploration. What remains should be pure signal: golden nuggets of detail that preserve full understanding with zero ambiguity.
 
-COMPRESSED BLOCK PLACEHOLDERS
-When the selected range includes previously compressed blocks, use this exact placeholder format when referencing one:
-
-- \`(bN)\`
-
+ROLL-UP COVERAGE (supersedes field)
 Compressed block sections in context are clearly marked with a header:
 
 - \`[Compressed section: <topic>]\`
 
 Compressed block IDs always use the \`bN\` form (never \`mNNN\`) and are injected at the bottom of each compressed block in a \`<dcp-block-id>...</dcp-block-id>\` tag, distinct from the \`<dcp-id>\` tags used on raw messages.
 
-Rules:
+When the selected range fully contains one or more active compressed blocks, the call is a roll-up. Declare which child blocks are being superseded with the per-range \`supersedes\` field:
 
-- When your selected range fully contains active compressed blocks, include every required block placeholder exactly once.
-- Do not invent placeholders for blocks outside the selected range.
-- Treat \`(bN)\` placeholders as RESERVED TOKENS. Do not emit \`(bN)\` text anywhere except intentional placeholders.
-- Use bare \`(bN)\` tokens in submitted summaries — do not wrap them in inline code spans, fenced code blocks, or indented code blocks.
-- If you need to mention a block in prose, use plain text like \`compressed bN\` (not as a placeholder).
-- Preflight check before finalizing: the set of \`(bN)\` placeholders in your summary must exactly match the required set, with no duplicates.
+- \`supersedes: ["b1", "b2"]\` lists each contained active \`bN\` block exactly once.
+- Use canonical \`bN\` ids (e.g. \`b3\`, not \`b03\`).
+- Do not list blocks outside the range, inactive blocks, or any block more than once.
+- Omit \`supersedes\` (or pass \`[]\`) when the range contains no active compressed blocks.
 
-These placeholders are semantic references used only when you submit a roll-up summary. They are validated and then removed when the tool processes your output, before the new parent block is stored. After those placeholders are removed, the remaining parent summary must still contain substantive authored text; placeholder-only shells are rejected.
+Roll-up semantics:
 
-ROLL-UP SEMANTICS
-When a range contains active compressed blocks, a roll-up is a real compression, not a no-op.
+- A roll-up is a real compression, not a no-op. The new parent block stores your \`summary\` text verbatim.
+- Listed child blocks are marked inactive/superseded; future context injects only the new parent block for that range. Children are not rendered separately unless the parent is later decompressed.
+- Roll-ups save future tokens by replacing multiple older summaries with one newly synthesized parent summary.
 
-- \`(bN)\` is a submission-time coverage marker for a contained child block being superseded.
-- The tool validates that each contained child block is referenced exactly once, removes the placeholders, stores the new parent summary text, and marks the child blocks inactive/superseded.
-- Future context injects only the new parent block for that range. The child blocks are not separately rendered unless the parent is later decompressed.
-- Roll-ups can save future tokens by replacing multiple older summaries with one newly synthesized parent summary.
-
-FLOW PRESERVATION WITH PLACEHOLDERS
-When you use compressed block placeholders, write the surrounding summary text so it still reads correctly AFTER those placeholders are removed.
-
-- Treat each placeholder as a coverage marker for a child block, not as literal text that will remain visible.
-- Ensure transitions before and after each placeholder preserve chronology and causality.
-- Do not write text that depends on the placeholder staying literal (for example, "as noted in \`(b2)\`").
-- Your final meaning must be coherent once the placeholders are removed before storage.
+Write the \`summary\` as a self-contained record of the rolled-up range. You do not need to interleave any block markers; the \`supersedes\` field carries that information.
 
 BOUNDARY IDS
 You specify boundaries by ID using the injected IDs visible in the conversation:
@@ -137,14 +122,14 @@ Rules:
 - Some environments may require each range to cover a minimum number of consecutive visible conversation items; if a compress call is rejected for being too small, retry with a larger consecutive range.
 - You may roll up older compressed sections by selecting a range that fully contains active blocks.
 - Partial overlap with an active compressed block is rejected.
-- When a selected range fully contains active blocks, your summary must include each contained \`(bN)\` placeholder exactly once or the tool call will be rejected.
+- When a selected range fully contains active blocks, list each contained block exactly once in \`supersedes\` or the tool call will be rejected.
 
 BATCHING
-When multiple independent ranges are ready and their boundaries do not overlap, include all of them as separate entries in the \`ranges\` array of a single tool call. Each entry must have its own \`startId\`, \`endId\`, and \`summary\`.`
+When multiple independent ranges are ready and their boundaries do not overlap, include all of them as separate entries in the \`ranges\` array of a single tool call. Each entry must have its own \`startId\`, \`endId\`, \`summary\`, and (if applicable) \`supersedes\`.`
 
 /**
  * Injected into messages when context usage exceeds maxContextPercent.
- * nudgeForce = "strong" — emergency recovery tone.
+ * nudgeForce = "strong": emergency recovery tone.
  */
 export const CONTEXT_LIMIT_NUDGE_STRONG = `<dcp-system-reminder>
 CRITICAL WARNING: MAX CONTEXT LIMIT REACHED
@@ -163,11 +148,11 @@ Only split into multiple compressions if one large range would reduce summary qu
 RANGE SELECTION
 Start from older, resolved history and capture as much stale context as safely possible in one pass.
 Avoid the newest active working slice unless it is clearly closed.
-If the visible context is already dominated by compressed sections, prefer a roll-up range that fully contains one or more older active \`bN\` blocks and, when useful, the surrounding resolved raw messages. Roll-up creates a new active parent block and stores a newly synthesized parent summary after removing the coverage placeholders.
+If the visible context is already dominated by compressed sections, prefer a roll-up range that fully contains one or more older active \`bN\` blocks and, when useful, the surrounding resolved raw messages. Roll-up creates a new active parent block whose summary supersedes the listed children.
 Use visible injected boundary IDs for compression (\`mNNN\` for messages, \`bN\` for compressed blocks), and ensure \`startId\` appears before \`endId\`.
 
 ROLL-UP RULE
-If your selected range fully contains active compressed blocks, the summary must include each contained \`(bN)\` placeholder exactly once. After acceptance, the parent block supersedes those child blocks so future context shows only the parent for that range.
+If your selected range fully contains active compressed blocks, list each contained block exactly once in the per-range \`supersedes\` array (e.g. \`supersedes: ["b1", "b2"]\`). After acceptance, the parent block supersedes those child blocks so future context shows only the parent for that range.
 
 SUMMARY REQUIREMENTS
 Your summary must cover all essential details from the selected range so work can continue without reopening raw messages.
@@ -176,7 +161,7 @@ If the compressed range includes user messages, preserve user intent exactly. Pr
 
 /**
  * Injected into messages when context usage exceeds maxContextPercent.
- * nudgeForce = "soft" — steady housekeeping tone.
+ * nudgeForce = "soft": steady housekeeping tone.
  */
 export const CONTEXT_LIMIT_NUDGE_SOFT = `<dcp-system-reminder>
 NOTICE: Context usage is high.
@@ -189,8 +174,8 @@ If the visible context is summary-heavy, prefer a roll-up of one or more older a
 Use visible boundary IDs (\`mNNN\` for messages, \`bN\` for compressed blocks) and ensure \`startId\` appears before \`endId\`.
 
 If multiple independent ranges are ready, batch them in a single \`compress\` call.
-If a selected range fully contains active compressed blocks, include each contained \`(bN)\` placeholder exactly once. Those placeholders are removed before storage: child blocks become inactive, and future context shows one parent block instead of many child blocks.
-If nothing is cleanly closed yet, continue — but compress at the earliest opportunity.
+If a selected range fully contains active compressed blocks, list each contained block exactly once in the per-range \`supersedes\` array. Listed children become inactive, and future context shows one parent block instead of many child blocks.
+If nothing is cleanly closed yet, continue, but compress at the earliest opportunity.
 </dcp-system-reminder>`
 
 /**
@@ -202,7 +187,7 @@ Evaluate the conversation for compressible ranges.
 
 If any range is cleanly closed and unlikely to be needed again, use the compress tool on it.
 If direction has shifted, compress earlier ranges that are now less relevant.
-If older visible context is mostly compressed summaries, prefer rolling those \`bN\` blocks up into a parent summary. Roll-up placeholders mark which child blocks are being superseded; they are removed before storage so future context shows only the new parent block.
+If older visible context is mostly compressed summaries, prefer rolling those \`bN\` blocks up into a parent summary. List the contained child blocks in the per-range \`supersedes\` field so future context shows only the new parent block.
 
 Prefer small, closed-range compressions over one broad compression, unless a roll-up is the cleanest way to reduce summary-heavy context.
 The goal is to filter noise and distill key information so context accumulation stays under control.
@@ -218,14 +203,14 @@ export const ITERATION_NUDGE = `<dcp-system-reminder>
 You've been iterating for a while after the last user message.
 
 If there is a closed portion that is unlikely to be referenced immediately (for example, finished research before implementation), use the compress tool on it now.
-If the visible context is already dominated by compressed sections, prefer a roll-up that fully contains one or more active \`bN\` blocks and, when useful, surrounding resolved raw messages. Roll-up is token-saving recompression: placeholders mark the child blocks being superseded, then those children stop rendering separately.
+If the visible context is already dominated by compressed sections, prefer a roll-up that fully contains one or more active \`bN\` blocks and, when useful, surrounding resolved raw messages. Roll-up is token-saving recompression: list the contained child blocks in \`supersedes\` and those children stop rendering separately.
 
 Prefer multiple short, closed ranges over one large range when several independent slices are ready, unless a roll-up is the safer cleanup.
 </dcp-system-reminder>`
 
 /**
  * Replaces SYSTEM_PROMPT when manualMode.enabled = true.
- * The agent should NOT proactively compress — only compress when explicitly
+ * The agent should NOT proactively compress; only compress when explicitly
  * requested by the user.
  */
 export const MANUAL_MODE_SYSTEM_PROMPT = `
@@ -242,11 +227,11 @@ WHEN TO COMPRESS
 WHEN YOU DO COMPRESS
 Apply the same quality standards as always:
 
-- Summaries must be EXHAUSTIVE — file paths, decisions, findings, exact constraints
+- Summaries must be EXHAUSTIVE: file paths, decisions, findings, exact constraints
 - Preserve user intent precisely; prefer direct quotes for short user messages
 - Use only boundary IDs visible in context (\`mNNN\` for messages, \`bN\` for compressed blocks)
-- When a selected range fully contains active compressed blocks, include each contained \`(bN)\` placeholder exactly once
-- Treat roll-up placeholders as coverage markers for contained child blocks; accepted roll-ups remove those placeholders before storage, but the remaining parent summary must still contain substantive authored text, then supersede the child blocks and show only the parent block for that range in future context
+- When a selected range fully contains active compressed blocks, list each contained block exactly once in the per-range \`supersedes\` array
+- A roll-up supersedes the listed child blocks: they become inactive, and future context shows only the new parent block for that range
 - Batch independent ranges in a single \`compress\` call when possible
 
 Do not compress active, still-needed context. Only compress ranges that are genuinely closed and whose raw form is no longer required.
